@@ -49,3 +49,32 @@ test('reads the main text when a quote has its own timestamp and tweetText',asyn
     assert.equal(mismatch.ok,false);assert.match(mismatch.error,/не совпал с превью/);
   }finally{globalThis.location=originalLocation;globalThis.document=originalDocument;}
 });
+
+test('types a reply character by character and stops if X clears the editor',async()=>{
+  const originalLocation=globalThis.location,originalDocument=globalThis.document;
+  const id='2000000000000000004',typed=[];
+  let clearAfterTyping=false;
+  const editor={innerText:'',focus(){},dispatchEvent(){throw new Error('Synthetic input event must not be sent');}};
+  const replyButton={click(){}};
+  const time={closest:()=>({getAttribute:()=>`/demo_author/status/${id}`})};
+  const card={querySelectorAll:selector=>selector==='time'?[time]:selector==='[data-testid="reply"]'?[replyButton]:[]};
+  const profile={getAttribute:()=>'/bot_example'};
+  globalThis.location={origin:'https://x.com',pathname:`/demo_author/status/${id}`,href:`https://x.com/demo_author/status/${id}`};
+  globalThis.document={
+    querySelector:selector=>selector==='[data-testid="AppTabBar_Profile_Link"]'?profile:selector==='[data-testid="tweetTextarea_0"]'?editor:null,
+    querySelectorAll:selector=>selector==='article[data-testid="tweet"]'?[card]:selector==='[data-testid="tweetTextarea_0"]'?[editor]:[],
+    execCommand:(command,_ui,char)=>{
+      typed.push([command,char]);editor.innerText+=char;
+      if(clearAfterTyping && typed.length===3)setTimeout(()=>{editor.innerText='';},100);
+      return true;
+    }
+  };
+  try{
+    const payload={kind:'reply',post:{id,author:'demo_author'},text:'да🙂',account:'bot_example'};
+    assert.deepEqual(await xPage('prepare',payload),{ok:true,data:{prepared:true}});
+    assert.deepEqual(typed,[['insertText','д'],['insertText','а'],['insertText','🙂']]);
+    editor.innerText='';typed.length=0;clearAfterTyping=true;
+    const cleared=await xPage('prepare',payload);
+    assert.equal(cleared.ok,false);assert.equal(cleared.mayHaveActed,false);assert.match(cleared.error,/очистил текст/);
+  }finally{globalThis.location=originalLocation;globalThis.document=originalDocument;}
+});

@@ -118,11 +118,17 @@ export async function xPage(op,payload={}) {
         if(kind==='reply'){requireTarget();const card=await wait(()=>cardFor(post.id),`пост ${post.id} перед ответом`);unique('[data-testid="reply"]',card).click();}
         const editor=await wait(()=>document.querySelector('[data-testid="tweetTextarea_0"]'),'редактор ответа');
         if(editor.innerText.trim())throw new Error('В редакторе уже есть черновик. Не перезаписываем его.');
-        editor.focus();document.execCommand('insertText',false,text);
-        editor.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:text}));
-        if(editor.innerText.trim()!==text.trim())throw new Error('Не удалось вставить текст публикации');
-        await sleep(350);
-        if(editor.innerText.trim()!==text.trim())throw new Error('X очистил текст ответа до отправки. Отправка отменена.');
+        editor.focus();
+        for(const char of text){
+          const current=unique('[data-testid="tweetTextarea_0"]');
+          if(current!==editor)throw new Error('X заменил поле публикации во время ввода. Отправка отменена.');
+          const command=char==='\n'?'insertLineBreak':'insertText';
+          if(!document.execCommand(command,false,char==='\n'?null:char))throw new Error('X не принял ввод в поле публикации. Отправка отменена.');
+          await sleep(25);
+        }
+        if(editor.innerText.trim()!==text.trim())throw new Error('Текст в редакторе не совпал с подготовленным ответом. Отправка отменена.');
+        await sleep(700);
+        if(unique('[data-testid="tweetTextarea_0"]').innerText.trim()!==text.trim())throw new Error('X очистил текст ответа до отправки. Отправка отменена.');
       } else throw new Error('Неизвестное действие');
       return {ok:true,data:{prepared:true}};
     }

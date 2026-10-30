@@ -36,7 +36,7 @@ test('local HTTP panel: configuration persistence, static UI, origin guard and e
     const bridgeHeaders={'Content-Type':'application/json','X-Persona-Bridge':'1','X-Extension-Id':extensionId,Origin:origin};
     assert.equal((await fetch(url+'/bridge/pair',{method:'POST',headers:{...bridgeHeaders,Origin:'https://evil.test'},body:JSON.stringify({code})})).status,403);
     assert.equal((await fetch(url+'/bridge/pair',{method:'POST',headers:bridgeHeaders,body:JSON.stringify({code})})).status,409);
-    const pair=await fetch(url+'/bridge/pair',{method:'POST',headers:bridgeHeaders,body:JSON.stringify({code,version:4})});assert.equal(pair.status,200);
+    const pair=await fetch(url+'/bridge/pair',{method:'POST',headers:bridgeHeaders,body:JSON.stringify({code,version:5})});assert.equal(pair.status,200);
     const token=(await pair.json()).token;
     assert.equal((await fetch(url+'/bridge/lease',{method:'POST',headers:{...bridgeHeaders,Authorization:'Bearer wrong'},body:'{}'})).status,401);
     const lease=await fetch(url+'/bridge/lease',{method:'POST',headers:{...bridgeHeaders,Authorization:'Bearer '+token},body:'{}'});

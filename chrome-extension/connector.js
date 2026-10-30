@@ -53,7 +53,7 @@ async function loop(){
 }
 $('#pair-form').addEventListener('submit',async e=>{
   e.preventDefault();$('#pair').disabled=true;
-  try{await target();const identity=await inject('status',{});const pair=await request('pair',{code:$('#code').value.trim(),version:4});token=pair.token;stopped=false;$('#code').value='';$('#status').textContent=`Подключено: @${identity.account}`;$('#disconnect').disabled=false;log(`Выбрана вкладка @${identity.account}`);loop();}
+  try{await target();const identity=await inject('status',{});const pair=await request('pair',{code:$('#code').value.trim(),version:5});token=pair.token;stopped=false;$('#code').value='';$('#status').textContent=`Подключено: @${identity.account}`;$('#disconnect').disabled=false;log(`Выбрана вкладка @${identity.account}`);loop();}
   catch(e){$('#status').textContent=e.message;$('#pair').disabled=false;}
 });
 $('#disconnect').addEventListener('click',async()=>{stopped=true;try{await request('disconnect');}catch{}token=null;$('#pair').disabled=false;$('#disconnect').disabled=true;$('#status').textContent='Отключено. Вкладка X оставлена открытой.';});
