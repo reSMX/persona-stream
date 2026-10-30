@@ -2,6 +2,7 @@
 // vocabulary, never source code, and never reads browser cookies or credentials.
 export async function xPage(op,payload={}) {
   let mayHaveActed=false;
+  const diagnostics={replacements:0,steps:[]};
   try {
     if(location.origin!=='https://x.com')throw new Error('Выбранная вкладка больше не на x.com');
     const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -39,6 +40,12 @@ export async function xPage(op,payload={}) {
       if(!['post','follow'].includes(payload.kind) && location.pathname!==`/${p.author}/status/${p.id}`)throw new Error('Адрес целевого поста изменился');
     };
     const visible=el=>!!el && el.getClientRects().length>0;
+    const noteEditor=(phase,index,editor)=>{
+      if(diagnostics.steps.length>=40)return;
+      const button=editor?.closest?.('[role="dialog"]')?.querySelector?.('[data-testid="tweetButton"]');
+      const content=editor?.innerText??'';
+      diagnostics.steps.push({phase,index,length:content.length,sample:content.slice(0,80),textContent:editor?.textContent?.slice(0,80),html:editor?.innerHTML?.slice(0,300),focused:document.activeElement===editor,buttonReady:!!button&&!button.disabled&&button.getAttribute('aria-disabled')!=='true'});
+    };
     const followHeader=()=>unique('[data-testid="userActions"]').parentElement;
     const replyMatchesTarget=(dialog,post)=>{
       const quotedLinks=[...dialog.querySelectorAll('a[href*="/status/"]')];
@@ -53,6 +60,33 @@ export async function xPage(op,payload={}) {
       return original.length>=24 && quoted.includes(original.slice(0,Math.min(45,original.length))) &&
         new RegExp(`(^|[^A-Za-z0-9_])@${post.author}([^A-Za-z0-9_]|$)`,'i').test(dialog.innerText||'');
     };
+    const composerDialog=(kind,post)=>{
+      // X nests dialog roles. Keep the nearest dialog for each editor so the
+      // outer overlay and the actual composer are not counted twice.
+      const dialogs=[...document.querySelectorAll('[role="dialog"]')].filter(d=>{
+        const editor=d.querySelector('[data-testid="tweetTextarea_0"]');
+        return visible(d)&&editor&&editor.closest('[role="dialog"]')===d;
+      });
+      if(kind==='reply'){
+        const matching=dialogs.filter(d=>replyMatchesTarget(d,post));
+        if(matching.length>1){
+          const focused=matching.filter(d=>d.contains(document.activeElement));
+          if(focused.length===1)return focused[0];
+          diagnostics.dialogs=matching.map(d=>({text:d.innerText?.slice(0,160),html:d.outerHTML?.slice(0,300),editor:d.querySelector('[data-testid="tweetTextarea_0"]')?.innerText?.slice(0,80)}));
+          throw new Error('Открыто несколько окон ответа на целевой пост');
+        }
+        if(matching.length===1)return matching[0];
+        if(dialogs.length){diagnostics.dialogs=dialogs.map(d=>({text:d.innerText?.slice(0,160),html:d.outerHTML?.slice(0,300)}));throw new Error('Окно ответа не совпадает с целевым постом');}
+      }
+      if(dialogs.length>1){diagnostics.dialogs=dialogs.map(d=>({text:d.innerText?.slice(0,160),html:d.outerHTML?.slice(0,300)}));throw new Error('Открыто несколько окон публикации X');}
+      return dialogs[0]||null;
+    };
+    const focusEditorEnd=current=>{
+      current.focus();
+      const selection=document.getSelection?.();
+      const range=document.createRange?.();
+      if(selection&&range){range.selectNodeContents(current);range.collapse(false);selection.removeAllRanges();selection.addRange(range);}
+    };
     blocked();
     if(op==='commit') {
       // No asynchronous wait before the outward click: the connector just checked
@@ -65,9 +99,9 @@ export async function xPage(op,payload={}) {
         if(kind==='reply') {
           if(!post || !/^\d+$/.test(post.id) || !/^[a-z0-9_]{1,15}$/.test(post.author))throw new Error('Некорректная цель ответа');
         } else if(!/^\/compose\/(post|tweet)$/.test(location.pathname))throw new Error('Открыт другой экран');
-        const editor=unique('[data-testid="tweetTextarea_0"]');
+        const dialog=composerDialog(kind,post);if(!dialog)throw new Error('Не найдено окно публикации');
+        const editor=unique('[data-testid="tweetTextarea_0"]',dialog);
         if(editor.innerText.trim()!==text.trim())throw new Error('Текст в редакторе изменился. Отправка отменена.');
-        const dialog=editor.closest('[role="dialog"]');if(!dialog)throw new Error('Не найдено окно публикации');
         if(kind==='reply' && !replyMatchesTarget(dialog,post))throw new Error('Не удалось подтвердить исходный пост в окне ответа. Отправка отменена.');
         button=unique('[data-testid="tweetButton"]',dialog);
       } else throw new Error('Неизвестное действие');
@@ -76,6 +110,24 @@ export async function xPage(op,payload={}) {
     }
     const account=await wait(identity,'ссылка профиля текущего аккаунта');
     if(op==='status')return {ok:true,data:{account}};
+    if(op==='editor-check'){
+      const {kind,post,expected}=payload;
+      if(!['reply','post'].includes(kind)||typeof expected!=='string')throw new Error('Некорректная проверка редактора');
+      for(let attempt=0;attempt<8;attempt++){
+        const dialog=composerDialog(kind,post);
+        if(dialog){
+          const editor=unique('[data-testid="tweetTextarea_0"]',dialog);
+          if(editor.innerText.trim()===expected.trim()){
+            noteEditor('verified',Array.from(expected).length,editor);
+            focusEditorEnd(editor);
+            return {ok:true,data:{diagnostics}};
+          }
+          if(attempt===7){noteEditor('text-mismatch',Array.from(expected).length,editor);throw new Error(`Текст редактора изменился на символе ${Array.from(expected).length}: ожидалось ${expected.length}, видно ${editor.innerText.length}. Отправка отменена.`);}
+        }
+        await sleep(50);
+      }
+      throw new Error('Поле публикации исчезло. Отправка отменена.');
+    }
     if(op==='scan') {
       if(location.pathname!=='/home')throw new Error('Открыта не главная лента X');
       const forYou=await wait(()=>{
@@ -115,22 +167,15 @@ export async function xPage(op,payload={}) {
       if(kind==='like'){requireTarget();const card=await wait(()=>cardFor(post.id),`пост ${post.id} перед лайком`);if(card.querySelector('[data-testid="unlike"]'))return {ok:true,data:{already:true,detail:'Лайк уже установлен'}};unique('[data-testid="like"]',card);}
       else if(kind==='follow'){requireTarget();if(location.pathname.toLowerCase()!==`/${post.author}`)throw new Error('Открыт другой профиль');await wait(()=>document.querySelector('[data-testid="userActions"]'),'кнопки профиля автора');const header=followHeader();if(header.querySelector('[data-testid$="-unfollow"]'))return {ok:true,data:{already:true,detail:'Подписка уже есть'}};unique('[data-testid$="-follow"]',header);}
       else if(kind==='reply'||kind==='post') {
-        if(kind==='reply'){requireTarget();const card=await wait(()=>cardFor(post.id),`пост ${post.id} перед ответом`);unique('[data-testid="reply"]',card).click();}
-        const editor=await wait(()=>document.querySelector('[data-testid="tweetTextarea_0"]'),'редактор ответа');
+        if(kind==='reply'&&!composerDialog(kind,post)){requireTarget();const card=await wait(()=>cardFor(post.id),`пост ${post.id} перед ответом`);unique('[data-testid="reply"]',card).click();}
+        let dialog=await wait(()=>composerDialog(kind,post),'окно ответа');
+        let editor=unique('[data-testid="tweetTextarea_0"]',dialog);
         if(editor.innerText.trim())throw new Error('В редакторе уже есть черновик. Не перезаписываем его.');
-        editor.focus();
-        for(const char of text){
-          const current=unique('[data-testid="tweetTextarea_0"]');
-          if(current!==editor)throw new Error('X заменил поле публикации во время ввода. Отправка отменена.');
-          const command=char==='\n'?'insertLineBreak':'insertText';
-          if(!document.execCommand(command,false,char==='\n'?null:char))throw new Error('X не принял ввод в поле публикации. Отправка отменена.');
-          await sleep(25);
-        }
-        if(editor.innerText.trim()!==text.trim())throw new Error('Текст в редакторе не совпал с подготовленным ответом. Отправка отменена.');
-        await sleep(700);
-        if(unique('[data-testid="tweetTextarea_0"]').innerText.trim()!==text.trim())throw new Error('X очистил текст ответа до отправки. Отправка отменена.');
+        noteEditor('opened',0,editor);
+        focusEditorEnd(editor);
+        return {ok:true,data:{prepared:true,diagnostics}};
       } else throw new Error('Неизвестное действие');
-      return {ok:true,data:{prepared:true}};
+      return {ok:true,data:{prepared:true,diagnostics}};
     }
     if(op==='receipt') {
       if(payload.kind==='like'){await wait(()=>cardFor(payload.post.id)?.querySelector('[data-testid="unlike"]'),'подтверждение лайка');return {ok:true,data:{detail:'Лайк подтверждён интерфейсом X'}};}
@@ -139,5 +184,5 @@ export async function xPage(op,payload={}) {
       return {ok:true,data:{detail:'Опубликовано: '+link.href}};
     }
     throw new Error('Неизвестная операция');
-  } catch(e){return {ok:false,error:e.message,mayHaveActed};}
+  } catch(e){return {ok:false,error:e.message,mayHaveActed,diagnostics};}
 }

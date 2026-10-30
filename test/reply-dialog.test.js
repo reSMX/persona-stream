@@ -9,11 +9,12 @@ test('reply modal may change the X URL, but exact quoted post and account still 
   const reply='Думаю, сюжет можно повернуть интереснее.';
   const button={disabled:false,getClientRects:()=>[{}],getAttribute:()=>null,click:()=>{clicks++;}};
   const quoted={innerText:original};
-  const dialog={innerText:`Example @example_author · 9h\n${original}\nReplying to @example_author`,querySelector:selector=>selector==='[data-testid="tweetText"]'?quoted:null,querySelectorAll:selector=>selector==='[data-testid="tweetButton"]'?[button]:[]};
   const editor={innerText:reply,closest:selector=>selector==='[role="dialog"]'?dialog:null};
+  const inlineEditor={innerText:'Unrelated inline draft'};
+  const dialog={innerText:`Example @example_author · 9h\n${original}\nReplying to @example_author`,getClientRects:()=>[{}],querySelector:selector=>selector==='[data-testid="tweetText"]'?quoted:selector==='[data-testid="tweetTextarea_0"]'?editor:null,querySelectorAll:selector=>selector==='[data-testid="tweetButton"]'?[button]:selector==='[data-testid="tweetTextarea_0"]'?[editor]:[]};
   const profile={getAttribute:()=>'/bot_example'};
   globalThis.location={origin:'https://x.com',pathname:'/compose/post',href:'https://x.com/compose/post'};
-  globalThis.document={querySelector:selector=>selector==='[data-testid="AppTabBar_Profile_Link"]'?profile:null,querySelectorAll:selector=>selector==='[data-testid="tweetTextarea_0"]'?[editor]:[]};
+  globalThis.document={querySelector:selector=>selector==='[data-testid="AppTabBar_Profile_Link"]'?profile:null,querySelectorAll:selector=>selector==='[role="dialog"]'?[dialog]:selector==='[data-testid="tweetTextarea_0"]'?[inlineEditor,editor]:[]};
   try {
     const base={kind:'reply',post:{id:'2000000000000000001',author:'example_author',originalText:original},text:reply,account:'bot_example'};
     const sent=await xPage('commit',base);
@@ -50,11 +51,12 @@ test('reads the main text when a quote has its own timestamp and tweetText',asyn
   }finally{globalThis.location=originalLocation;globalThis.document=originalDocument;}
 });
 
-test('types a reply character by character and stops if X clears the editor',async()=>{
+test('prepares the target editor and verifies browser-typed characters',async()=>{
   const originalLocation=globalThis.location,originalDocument=globalThis.document;
-  const id='2000000000000000004',typed=[];
-  let clearAfterTyping=false;
-  const editor={innerText:'',focus(){},dispatchEvent(){throw new Error('Synthetic input event must not be sent');}};
+  const id='2000000000000000004';
+  const makeEditor=innerText=>({innerText,closest:selector=>selector==='[role="dialog"]'?dialog:null,focus(){globalThis.document.activeElement=this;},dispatchEvent(){throw new Error('Synthetic input event must not be sent');}});
+  let editor=makeEditor('');
+  const dialog={getClientRects:()=>[{}],querySelector:selector=>selector==='[data-testid="tweetTextarea_0"]'?editor:null,querySelectorAll:selector=>selector==='[data-testid="tweetTextarea_0"]'?[editor]:selector==='a[href*="/status/"]'?[{getAttribute:()=>`/demo_author/status/${id}`}]:[]};
   const replyButton={click(){}};
   const time={closest:()=>({getAttribute:()=>`/demo_author/status/${id}`})};
   const card={querySelectorAll:selector=>selector==='time'?[time]:selector==='[data-testid="reply"]'?[replyButton]:[]};
@@ -62,19 +64,21 @@ test('types a reply character by character and stops if X clears the editor',asy
   globalThis.location={origin:'https://x.com',pathname:`/demo_author/status/${id}`,href:`https://x.com/demo_author/status/${id}`};
   globalThis.document={
     querySelector:selector=>selector==='[data-testid="AppTabBar_Profile_Link"]'?profile:selector==='[data-testid="tweetTextarea_0"]'?editor:null,
-    querySelectorAll:selector=>selector==='article[data-testid="tweet"]'?[card]:selector==='[data-testid="tweetTextarea_0"]'?[editor]:[],
-    execCommand:(command,_ui,char)=>{
-      typed.push([command,char]);editor.innerText+=char;
-      if(clearAfterTyping && typed.length===3)setTimeout(()=>{editor.innerText='';},100);
-      return true;
-    }
+    querySelectorAll:selector=>selector==='article[data-testid="tweet"]'?[card]:selector==='[role="dialog"]'?[dialog]:selector==='[data-testid="tweetTextarea_0"]'?[editor]:[],
+    execCommand:()=>{throw new Error('Draft.js duplicates execCommand input');}
   };
   try{
     const payload={kind:'reply',post:{id,author:'demo_author'},text:'да🙂',account:'bot_example'};
-    assert.deepEqual(await xPage('prepare',payload),{ok:true,data:{prepared:true}});
-    assert.deepEqual(typed,[['insertText','д'],['insertText','а'],['insertText','🙂']]);
-    editor.innerText='';typed.length=0;clearAfterTyping=true;
-    const cleared=await xPage('prepare',payload);
-    assert.equal(cleared.ok,false);assert.equal(cleared.mayHaveActed,false);assert.match(cleared.error,/очистил текст/);
+    const prepared=await xPage('prepare',payload);
+    assert.equal(prepared.ok,true);assert.equal(prepared.data.prepared,true);assert.equal(editor.innerText,'');
+    for(const expected of ['д','да','да🙂']){
+      editor=makeEditor(expected);
+      const checked=await xPage('editor-check',{...payload,expected});
+      assert.equal(checked.ok,true);
+    }
+    editor=makeEditor('');
+    const cleared=await xPage('editor-check',{...payload,expected:'да🙂'});
+    assert.equal(cleared.ok,false);assert.equal(cleared.mayHaveActed,false);assert.match(cleared.error,/Текст редактора изменился/);
+    assert.ok(cleared.diagnostics.steps.some(step=>step.phase==='text-mismatch'));
   }finally{globalThis.location=originalLocation;globalThis.document=originalDocument;}
 });

@@ -8,6 +8,7 @@ import { Store } from './store.js';
 import { Ollama } from './model.js';
 import { XBrowser } from './browser.js';
 import { Engine } from './engine.js';
+import { validatePublicText } from './ranking.js';
 import { ExtensionBridge, ExtensionBrowser, BrowserRouter } from './extension-bridge.js';
 
 const ROOT=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -55,7 +56,7 @@ app.get('/api/state',(req,res)=>res.json({config:config.value,status:engine.stat
 app.post('/api/browser/pair-code',(req,res)=>{idle();res.json({...bridge.pairingCode(),extensionPath:path.join(ROOT,'chrome-extension')});});
 app.post('/bridge/pair',(req,res)=>{
   idle();const code=z.string().regex(/^\d{6}$/).parse(req.body.code);
-  if(req.body.version!==5)return res.status(409).json({error:'Обнови расширение Persona Stream в chrome://extensions и подключи вкладку X заново.'});
+  if(req.body.version!==10)return res.status(409).json({error:'Обнови расширение Persona Stream в chrome://extensions и подключи вкладку X заново.'});
   res.json(bridge.pair(code,String(req.headers['x-extension-id']||'')));
 });
 app.use('/bridge',(req,res,next)=>{
@@ -65,17 +66,22 @@ app.use('/bridge',(req,res,next)=>{
 });
 app.post('/bridge/next',async(req,res)=>res.json({task:await bridge.next()}));
 app.post('/bridge/result',(req,res)=>{
-  const body=z.object({id:z.string().uuid(),result:z.object({ok:z.boolean(),data:z.unknown().optional(),error:z.string().max(2000).optional(),mayHaveActed:z.boolean().optional(),stage:z.string().max(200).optional(),trace:z.array(z.string().max(200)).max(12).optional()})}).parse(req.body);
+  const diagnostics=z.object({
+    replacements:z.number().int().min(0).max(1000),
+    steps:z.array(z.object({phase:z.string().max(40),index:z.number().int().min(0).max(1000),length:z.number().int().min(-1).max(10000),sample:z.string().max(80).optional(),textContent:z.string().max(80).optional(),html:z.string().max(300).optional(),focused:z.boolean(),buttonReady:z.boolean()})).max(40),
+    dialogs:z.array(z.object({text:z.string().max(160).optional(),html:z.string().max(300).optional(),editor:z.string().max(80).optional()})).max(10).optional()
+  });
+  const body=z.object({id:z.string().uuid(),result:z.object({ok:z.boolean(),data:z.unknown().optional(),error:z.string().max(2000).optional(),mayHaveActed:z.boolean().optional(),stage:z.string().max(200).optional(),trace:z.array(z.string().max(200)).max(12).optional(),diagnostics:diagnostics.nullable().optional()})}).parse(req.body);
   const task=bridge.pending?.id===body.id?bridge.pending:null;
   const accepted=bridge.result(body.id,body.result);
   if(accepted && task && task.op!=='status'){
     const target=task.payload?.post?.url||null;
     const label=task.op==='perform'?`Действие ${task.payload.kind}`:task.op==='read'?'Чтение поста':'Просмотр For you';
-    stores.live.event(`${label}: ${body.result.ok?'готово':body.result.error}`,body.result.ok?'info':'error',{target,stage:body.result.stage,trace:body.result.trace,mayHaveActed:!!body.result.mayHaveActed});
+    stores.live.event(`${label}: ${body.result.ok?'готово':body.result.error}`,body.result.ok?'info':'error',{target,stage:body.result.stage,trace:body.result.trace,editor:body.result.diagnostics,mayHaveActed:!!body.result.mayHaveActed});
   }
   res.json({accepted});
 });
-app.post('/bridge/lease',(req,res)=>res.json({valid:!!bridge.pending && bridge.pending.id===req.body.id && engine.status.busy && !engine.controller?.signal.aborted}));
+app.post('/bridge/lease',(req,res)=>res.json({valid:!!bridge.pending && bridge.pending.id===req.body.id && (engine.status.busy||browserBusy) && !engine.controller?.signal.aborted}));
 app.post('/bridge/disconnect',(req,res)=>{engine.stop();bridge.disconnect();res.json({ok:true});});
 app.post('/api/config',(req,res)=>{
   idle();
@@ -110,6 +116,32 @@ app.post('/api/actions/:id/resolve',(req,res)=>{
   store.finishAction(row.id,status,'Результат проверен оператором вручную.');
   store.event(`Оператор отметил результат действия №${row.id}: ${status}`);
   res.json({ok:true});
+});
+app.post('/api/actions/:id/retry-failed-reply',async(req,res)=>{
+  idle();
+  if(req.query.dataset!=='live'||config.value.browser.connection!=='extension'||req.body?.acknowledgePublicReply!==true) return res.status(400).json({error:'Нужны память X, расширение и явное подтверждение пробного ответа.'});
+  const id=Number(req.params.id);
+  if(!Number.isSafeInteger(id)||id<1)return res.status(400).json({error:'Некорректный номер действия'});
+  const row=stores.live.get('SELECT * FROM actions WHERE id=?',id);
+  if(!row||row.kind!=='reply'||row.status!=='failed'||!['Готовлю действие reply ','Ввожу текст reply '].some(prefix=>row.detail.startsWith(prefix)))return res.status(409).json({error:'Повтор доступен только для ответа, который точно не был отправлен.'});
+  const post=stores.live.get("SELECT * FROM posts WHERE id=? AND author=? AND status='read'",row.target,row.author);
+  if(!post||!post.body)return res.status(409).json({error:'Исходный прочитанный пост не найден.'});
+  const blocked=stores.live.canAct('reply',row.author,config.value);
+  if(blocked)return res.status(409).json({error:blocked});
+  try{validatePublicText(row.text);}catch(e){return res.status(409).json({error:e.message});}
+  browserBusy=true;let started=false;
+  try{
+    await browser.ready();
+    stores.live.run("UPDATE actions SET status='pending',detail='Пробный повтор: готовится отправка.' WHERE id=?",id);started=true;
+    stores.live.event(`Пробный повтор ответа №${id} @${row.author}`,'info',{actionId:id,url:post.url,text:row.text});
+    const detail=await browser.perform('reply',{...post,text:post.body},row.text);
+    stores.live.finishAction(id,'success',detail);
+    stores.live.event(`Пробный ответ №${id}: ${detail}`,'info',{actionId:id,url:post.url});
+    res.json({ok:true,detail});
+  }catch(e){
+    if(started){stores.live.finishAction(id,e.mayHaveActed?'unknown':'failed',e.message);stores.live.event(`Пробный ответ №${id}: ${e.message}`,'error',{actionId:id,mayHaveActed:!!e.mayHaveActed});}
+    res.status(409).json({error:e.mayHaveActed?'Нажатие могло состояться. Проверь X перед любой новой попыткой.':e.message});
+  }finally{browserBusy=false;}
 });
 app.post('/api/demo/reset',(req,res)=>{
   idle();stores.demo.close();
