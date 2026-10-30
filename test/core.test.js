@@ -42,6 +42,18 @@ test('one post cannot duplicate author memory or interest updates',()=>{
   assert.equal(s.author('author').encounters,before.encounters);assert.equal(s.author('author').memories.length,1);
   assert.equal(s.topics().find(t=>t.name==='Локальные ИИ-модели').weight,weight);s.close();
 });
+test('a selected post can be reconsidered after reading fails, but a read post cannot',()=>{
+  const s=makeStore(),post=makePost('77');
+  s.rememberPreview(post,0.8,'first selection',true);
+  assert.equal(s.seen(post.id),false);
+  s.rememberPreview({...post,preview:'updated preview'},0.7,'second selection',true);
+  assert.equal(s.get('SELECT preview FROM posts WHERE id=?',post.id).preview,'updated preview');
+  s.learn(post,analysis(),config());
+  assert.equal(s.seen(post.id),true);
+  s.rememberPreview(post,0.9,'should not overwrite',true);
+  assert.equal(s.get('SELECT status FROM posts WHERE id=?',post.id).status,'read');
+  s.close();
+});
 test('invented quotes cannot create trusted author impressions',()=>{
   const s=makeStore(),a=analysis();a.evidenceQuote='Это придумано';addRead(s,'1','author',a);
   const author=s.author('author');assert.equal(author.affinity,0);assert.equal(author.summary,'');assert.equal(author.memories[0].confidence,0);s.close();

@@ -42,9 +42,11 @@ export class Store {
   setState(key, value) { this.run('INSERT INTO state VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',key,JSON.stringify(value)); }
   state(key, fallback) { const r = this.get('SELECT value FROM state WHERE key=?', key); return r ? JSON.parse(r.value) : fallback; }
   rememberPreview(post, score, reason, selected) {
-    this.run('INSERT OR IGNORE INTO posts(id,author,url,preview,status,score,reason,created) VALUES(?,?,?,?,?,?,?,?)',post.id,post.author,post.url,post.preview,selected ? 'selected' : 'skipped',score,reason,now());
+    this.run(`INSERT INTO posts(id,author,url,preview,status,score,reason,created) VALUES(?,?,?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET preview=excluded.preview,status=excluded.status,score=excluded.score,reason=excluded.reason
+      WHERE posts.status='selected'`,post.id,post.author,post.url,post.preview,selected ? 'selected' : 'skipped',score,reason,now());
   }
-  seen(id) { return !!this.get('SELECT id FROM posts WHERE id=?',id); }
+  seen(id) { const post=this.get('SELECT status FROM posts WHERE id=?',id);return !!post && post.status!=='selected'; }
   author(handle, topicNames = []) {
     const profile = this.get('SELECT * FROM authors WHERE handle=?',handle);
     if (!profile) return null;
