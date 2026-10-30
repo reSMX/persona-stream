@@ -25,6 +25,14 @@ export async function xPage(op,payload={}) {
       );
       if(cards.length>1)throw new Error('На странице несколько копий целевого поста');return cards[0]||null;
     };
+    const mainText=(card,preview)=>{
+      const compact=value=>String(value||'').toLowerCase().replace(/\s+/g,'');
+      const expected=compact(preview).slice(0,80);
+      const blocks=[...card.querySelectorAll('[data-testid="tweetText"]')];
+      const match=expected && blocks.find(el=>compact(el.innerText).startsWith(expected));
+      if(!match)throw new Error(`Текст выбранного поста не совпал с превью (текстовых блоков: ${blocks.length}).`);
+      return match;
+    };
     const requireTarget=()=>{
       const p=payload.post;
       if(!p || !/^\d+$/.test(p.id) || !/^[a-z0-9_]{1,15}$/.test(p.author))throw new Error('Некорректная цель');
@@ -93,9 +101,11 @@ export async function xPage(op,payload={}) {
     }
     if(op==='read') {
       requireTarget();let card=await wait(()=>cardFor(payload.post.id),`пост ${payload.post.id} на странице`);
-      const more=card.querySelector('[data-testid="tweet-text-show-more-link"]');
-      if(more){more.click();await sleep(500);card=cardFor(payload.post.id);if(card?.querySelector('[data-testid="tweet-text-show-more-link"]'))throw new Error('Не удалось раскрыть полный текст');}
-      const text=unique('[data-testid="tweetText"]',card).innerText;
+      let body=mainText(card,payload.post.preview);
+      const more=body.querySelector?.('[data-testid="tweet-text-show-more-link"]') ||
+        (card.querySelectorAll('[data-testid="tweetText"]').length===1?card.querySelector('[data-testid="tweet-text-show-more-link"]'):null);
+      if(more){more.click();await sleep(500);card=cardFor(payload.post.id);body=mainText(card,payload.post.preview);if(body.querySelector?.('[data-testid="tweet-text-show-more-link"]'))throw new Error('Не удалось раскрыть полный текст');}
+      const text=body.innerText;
       if(text.length>10000)throw new Error('Пост длиннее 10 000 знаков');
       const context=[];for(const other of document.querySelectorAll('article[data-testid="tweet"]')){if(other===card)break;const href=other.querySelector('time')?.closest('a')?.getAttribute('href');const content=other.querySelector('[data-testid="tweetText"]')?.innerText;if(href&&content)context.push({url:'https://x.com'+href,text:content.slice(0,700)});}
       return {ok:true,data:{text,context:context.slice(-3)}};

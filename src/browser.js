@@ -88,17 +88,27 @@ export class XBrowser {
       await page.goto(post.url,{waitUntil:'domcontentloaded',timeout:45000});
       await this.ready(page);
       const card=await this.card(page,post.id);
-      const more=card.getByTestId('tweet-text-show-more-link');
-      if(await more.count()===1) { await more.click(); }
-      if(await more.count() && await more.isVisible()) throw new BrowserAttention('X не раскрыл полный текст. Пост пропущен.');
-      const text=await card.getByTestId('tweetText').innerText();
+      const textBlocks=card.getByTestId('tweetText');
+      const mainIndex=()=>textBlocks.evaluateAll((blocks,preview)=>{
+        const compact=value=>String(value||'').toLowerCase().replace(/\s+/g,'');
+        const expected=compact(preview).slice(0,80);
+        return expected?blocks.findIndex(el=>compact(el.innerText).startsWith(expected)):-1;
+      },post.preview);
+      let index=await mainIndex();
+      if(index<0)throw new BrowserAttention(`Текст выбранного поста не совпал с превью (текстовых блоков: ${await textBlocks.count()}).`);
+      let body=textBlocks.nth(index);
+      let more=body.getByTestId('tweet-text-show-more-link');
+      if(await more.count()===0 && await textBlocks.count()===1)more=card.getByTestId('tweet-text-show-more-link');
+      if(await more.count()===1){await more.click();index=await mainIndex();if(index<0)throw new BrowserAttention('После раскрытия текста пост не совпал с превью.');body=textBlocks.nth(index);}
+      if(await body.getByTestId('tweet-text-show-more-link').count())throw new BrowserAttention('X не раскрыл полный текст. Пост пропущен.');
+      const text=await body.innerText();
       if(text.length>10000) throw new Error('Пост длиннее лимита полного чтения (10 000 знаков). Увеличивать контекст автоматически не будем.');
       // Visible preceding cards are context, never instructions or a source of tool calls.
       const context=await page.locator('article[data-testid="tweet"]').evaluateAll((cards,id)=>{
         const result=[];
         for(const card of cards) {
           const href=card.querySelector('time')?.closest('a')?.getAttribute('href') || '';
-          if(href.endsWith(`/status/${id}`)) break;
+          if([...card.querySelectorAll('time')].some(t=>t.closest('a')?.getAttribute('href')?.endsWith(`/status/${id}`))) break;
           const text=card.querySelector('[data-testid="tweetText"]')?.innerText;
           if(text) result.push({url:`https://x.com${href}`,text:text.slice(0,700)});
         }

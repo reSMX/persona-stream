@@ -25,15 +25,16 @@ test('reply modal may change the X URL, but exact quoted post and account still 
   } finally {globalThis.location=originalLocation;globalThis.document=originalDocument;}
 });
 
-test('reads a post when a quoted video has the first timestamp in its article',async()=>{
+test('reads the main text when a quote has its own timestamp and tweetText',async()=>{
   const originalLocation=globalThis.location,originalDocument=globalThis.document;
   const id='2000000000000000002';
   const quotedTime={closest:()=>({getAttribute:()=>'/quoted/status/2000000000000000003'})};
   const targetTime={closest:()=>({getAttribute:()=>`/demo_author/status/${id}`})};
   const body={innerText:'A fictional post with a quoted video'};
+  const quotedBody={innerText:'The quoted post says something entirely different'};
   const card={
     querySelector:()=>null,
-    querySelectorAll:selector=>selector==='time'?[quotedTime,targetTime]:selector==='[data-testid="tweetText"]'?[body]:[]
+    querySelectorAll:selector=>selector==='time'?[quotedTime,targetTime]:selector==='[data-testid="tweetText"]'?[quotedBody,body]:[]
   };
   const profile={getAttribute:()=>'/bot_example'};
   globalThis.location={origin:'https://x.com',pathname:`/demo_author/status/${id}`,href:`https://x.com/demo_author/status/${id}`};
@@ -42,7 +43,9 @@ test('reads a post when a quoted video has the first timestamp in its article',a
     querySelectorAll:selector=>selector==='article[data-testid="tweet"]'?[card]:[]
   };
   try{
-    const result=await xPage('read',{post:{id,author:'demo_author'},account:'bot_example'});
+    const result=await xPage('read',{post:{id,author:'demo_author',preview:body.innerText},account:'bot_example'});
     assert.deepEqual(result,{ok:true,data:{text:body.innerText,context:[]}});
+    const mismatch=await xPage('read',{post:{id,author:'demo_author',preview:'A different preview'},account:'bot_example'});
+    assert.equal(mismatch.ok,false);assert.match(mismatch.error,/не совпал с превью/);
   }finally{globalThis.location=originalLocation;globalThis.document=originalDocument;}
 });
