@@ -1,0 +1,46 @@
+# Dependencies and generated output
+/node_modules/
+/test-results/
+/playwright-report/
+/coverage/
+
+# Local settings, personas, author memory, browser sessions and logs
+/data/
+/logs/
+/private/
+/local/
+/personas/
+/model-descriptions/
+/models/
+/exports/
+/backups/
+/.env
+/.env.*
+!/.env.example
+config.json
+*.local.json
+*.secret.json
+persona-memory*.json
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.jsonl
+*.log
+*.pid
+
+# Local model files and model definitions
+*.gguf
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.modelfile
+Modelfile*
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
