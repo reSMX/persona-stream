@@ -46,6 +46,7 @@ export class Store {
       ON CONFLICT(id) DO UPDATE SET preview=excluded.preview,status=excluded.status,score=excluded.score,reason=excluded.reason
       WHERE posts.status='selected'`,post.id,post.author,post.url,post.preview,selected ? 'selected' : 'skipped',score,reason,now());
   }
+  markNotInterested(id) { this.run("UPDATE posts SET status='not_interested' WHERE id=? AND status='skipped'",id); }
   seen(id) { const post=this.get('SELECT status FROM posts WHERE id=?',id);return !!post && post.status!=='selected'; }
   author(handle, topicNames = []) {
     const profile = this.get('SELECT * FROM authors WHERE handle=?',handle);
@@ -98,16 +99,18 @@ export class Store {
   finishAction(id,status,detail) { this.run('UPDATE actions SET status=?,detail=? WHERE id=?',status,detail,id); }
   canAct(kind,author,config,at=Date.now()) {
     const a = config.actions;
-    const allowed = {like:a.likes,reply:a.replies,follow:a.follows,post:a.posts};
+    const allowed = {like:a.likes,reply:a.replies,follow:a.follows,post:a.posts,notInterested:a.notInterested};
     if (!allowed[kind]) return 'Действие выключено';
     if (this.get("SELECT id FROM actions WHERE status IN ('unknown','pending')")) return 'Есть действие без подтверждённого результата';
-    if (this.readCount()<a.warmupReads) return 'Знакомство с лентой';
+    if (kind!=='notInterested' && this.readCount()<a.warmupReads) return 'Знакомство с лентой';
     const since = new Date(at-86400000).toISOString();
-    const limits = {like:a.maxLikesDay,reply:a.maxRepliesDay,follow:a.maxFollowsDay,post:a.maxPostsDay};
+    const limits = {like:a.maxLikesDay,reply:a.maxRepliesDay,follow:a.maxFollowsDay,post:a.maxPostsDay,notInterested:a.maxNotInterestedDay};
     const n = this.get("SELECT COUNT(*) n FROM actions WHERE kind=? AND created>? AND status IN ('success','pending','unknown')",kind,since).n;
     if(n>=limits[kind]) return 'Лимит за 24 часа';
-    const last = this.get("SELECT created FROM actions WHERE status IN ('success','pending','unknown') ORDER BY id DESC LIMIT 1");
-    if(last && at-Date.parse(last.created)<a.minGapSeconds*1000) return 'Пауза между действиями';
+    const last = kind==='notInterested'
+      ? this.get("SELECT created FROM actions WHERE kind='notInterested' AND status IN ('success','pending','unknown') ORDER BY id DESC LIMIT 1")
+      : this.get("SELECT created FROM actions WHERE kind!='notInterested' AND status IN ('success','pending','unknown') ORDER BY id DESC LIMIT 1");
+    if(last && at-Date.parse(last.created)<(kind==='notInterested'?Math.max(600,a.minGapSeconds):a.minGapSeconds)*1000) return 'Пауза между действиями';
     if(kind==='reply' && this.get("SELECT id FROM actions WHERE kind='reply' AND author=? AND created>? AND status IN ('success','pending','unknown')",author,since)) return 'Автор уже получил ответ за последние 24 часа';
     return null;
   }

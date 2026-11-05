@@ -16,7 +16,7 @@ export const ConfigSchema = z.object({
   persona: z.object({ name: z.string().trim().min(1).max(80), biography: z.string().min(1).max(12000), style: z.string().min(1).max(4000), privateNotes: z.string().max(4000), boundaries: z.string().max(4000) }),
   topics: z.array(topic).min(1).max(30).refine(ts => new Set(ts.map(t => t.name.toLowerCase())).size === ts.length, 'Названия интересов должны различаться'),
   reading: z.object({ previewChars: z.number().int().min(80).max(600), threshold: z.number().min(0).max(1), exploration: z.number().min(0).max(0.5), batchSize: z.number().int().min(2).max(16), fullReads: z.number().int().min(1).max(5), intervalSeconds: z.number().int().min(30).max(3600), learningRate: z.number().min(0).max(0.15), maxReadsPerSession: z.number().int().min(1).max(300) }),
-  actions: z.object({ likes: z.boolean(), replies: z.boolean(), follows: z.boolean(), posts: z.boolean(), maxLikesDay: z.number().int().min(0).max(100), maxRepliesDay: z.number().int().min(0).max(30), maxFollowsDay: z.number().int().min(0).max(20), maxPostsDay: z.number().int().min(0).max(10), minGapSeconds: z.number().int().min(30).max(7200), warmupReads: z.number().int().min(0).max(500), followEvidence: z.number().int().min(2).max(20), postsAfterReads: z.number().int().min(5).max(1000) }),
+  actions: z.object({ likes: z.boolean(), replies: z.boolean(), follows: z.boolean(), posts: z.boolean(), notInterested: z.boolean().default(true), notInterestedBelow: z.number().min(0).max(1).default(0.4), maxNotInterestedDay: z.number().int().min(0).max(30).default(5), maxLikesDay: z.number().int().min(0).max(100), maxRepliesDay: z.number().int().min(0).max(30), maxFollowsDay: z.number().int().min(0).max(20), maxPostsDay: z.number().int().min(0).max(10), minGapSeconds: z.number().int().min(30).max(7200), warmupReads: z.number().int().min(0).max(500), followEvidence: z.number().int().min(2).max(20), postsAfterReads: z.number().int().min(5).max(1000) }),
   browser: z.object({ connection: z.enum(['managed','extension']).default('managed'), channel: z.enum(['msedge', 'chrome', 'chromium']), account: z.string().regex(/^@?[A-Za-z0-9_]{0,15}$/) })
 });
 export const DEFAULT_CONFIG = ConfigSchema.parse({
@@ -30,7 +30,7 @@ export const DEFAULT_CONFIG = ConfigSchema.parse({
   },
   topics: DEFAULT_TOPICS,
   reading: { previewChars: 240, threshold: 0.55, exploration: 0.2, batchSize: 8, fullReads: 3, intervalSeconds: 180, learningRate: 0.04, maxReadsPerSession: 30 },
-  actions: { likes: true, replies: true, follows: true, posts: true, maxLikesDay: 20, maxRepliesDay: 5, maxFollowsDay: 2, maxPostsDay: 1, minGapSeconds: 180, warmupReads: 5, followEvidence: 3, postsAfterReads: 30 },
+  actions: { likes: true, replies: true, follows: true, posts: true, notInterested: true, notInterestedBelow: 0.4, maxNotInterestedDay: 5, maxLikesDay: 20, maxRepliesDay: 5, maxFollowsDay: 2, maxPostsDay: 1, minGapSeconds: 180, warmupReads: 5, followEvidence: 3, postsAfterReads: 30 },
   browser: { channel: 'msedge', account: '' }
 });
 

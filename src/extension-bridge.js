@@ -69,6 +69,11 @@ export class ExtensionBrowser {
     for(const post of data){const u=statusUrl(post.url);if(!u.pathname.endsWith('/status/'+post.id) || u.pathname.split('/')[1].toLowerCase()!==post.author)throw new Error('Идентификатор поста не совпал с адресом');}
     return data.filter(p=>!exclude(p.id) && p.author!==this.identity).slice(0,limit);
   }
+  async visiblePostIds(signal){
+    signal?.throwIfAborted();
+    const ids=z.array(z.string().regex(/^\d+$/)).max(100).parse(await this.bridge.request('visible',{account:this.getConfig().browser.account}));
+    signal?.throwIfAborted();return ids;
+  }
   async read(post,signal){
     statusUrl(post.url);signal?.throwIfAborted();
     const data=z.object({text:z.string().min(1).max(10000),context:z.array(z.object({text:z.string().max(700),url:z.string().max(250)})).max(3)}).parse(await this.bridge.request('read',{post,account:this.getConfig().browser.account}));
@@ -76,9 +81,9 @@ export class ExtensionBrowser {
   }
   async perform(kind,post,text,signal){
     signal?.throwIfAborted();
-    if(!['like','reply','follow','post'].includes(kind))throw new Error('Неизвестное действие');
-    if(['like','reply'].includes(kind))statusUrl(post.url);
-    const data=await this.bridge.request('perform',{kind,post:{id:post.id,author:post.author,url:post.url,originalText:String(post.text||'').slice(0,160)},text,account:this.getConfig().browser.account});
+    if(!['like','reply','follow','post','notInterested'].includes(kind))throw new Error('Неизвестное действие');
+    if(['like','reply','notInterested'].includes(kind))statusUrl(post.url);
+    const data=await this.bridge.request('perform',{kind,post:{id:post.id,author:post.author,url:post.url,preview:String(post.preview||'').slice(0,600),originalText:String(post.text||'').slice(0,160)},text,account:this.getConfig().browser.account});
     return z.object({detail:z.string().max(1000)}).parse(data).detail;
   }
 }
@@ -92,6 +97,7 @@ export class BrowserRouter {
   ready(...args){return this.active.ready(...args);}
   inspect(...args){return this.active.inspect(...args);}
   scan(...args){return this.active.scan(...args);}
+  visiblePostIds(...args){return this.active.visiblePostIds(...args);}
   read(...args){return this.active.read(...args);}
   perform(...args){return this.active.perform(...args);}
   async close(){await this.managed.close();await this.extension.close();}

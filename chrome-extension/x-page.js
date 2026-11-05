@@ -26,6 +26,28 @@ export async function xPage(op,payload={}) {
       );
       if(cards.length>1)throw new Error('На странице несколько копий целевого поста');return cards[0]||null;
     };
+    const directTime=card=>[...card.querySelectorAll('time')].find(time=>time.closest('article[data-testid="tweet"]')===card);
+    const directText=card=>[...card.querySelectorAll('[data-testid="tweetText"]')].find(body=>body.closest('article[data-testid="tweet"]')===card);
+    const feedCardFor=post=>{
+      const expected=`/${post.author}/status/${post.id}`;
+      const cards=[...document.querySelectorAll('article[data-testid="tweet"]')].filter(card=>directTime(card)?.closest('a')?.getAttribute('href')?.toLowerCase()===expected);
+      if(cards.length>1)throw new Error('В ленте несколько копий целевого поста');
+      return cards[0]||null;
+    };
+    const feedTextMatches=(card,preview)=>{
+      const compact=value=>String(value||'').toLowerCase().replace(/\s+/g,'');
+      return !!preview && compact(directText(card)?.innerText).startsWith(compact(preview).slice(0,80));
+    };
+    const forYouActive=()=>location.pathname==='/home' && [...document.querySelectorAll('[role="tab"]')].some(tab=>/^(For you|Для вас)$/i.test(tab.textContent.trim()) && tab.getAttribute('aria-selected')==='true');
+    const feedbackItem=()=>{
+      const menus=[...document.querySelectorAll('[role="menu"]')].filter(menu=>visible(menu));
+      if(!menus.length)return null;
+      if(menus.length!==1)throw new Error(`Меню X неоднозначно: ${menus.length}`);
+      const items=[...menus[0].querySelectorAll('[role="menuitem"]')];
+      const matches=items.filter(item=>/^(Not interested in this post|Не интересует этот пост|Не интересно|Неинтересно)$/i.test(item.innerText.trim().replace(/\s+/g,' ')));
+      if(matches.length!==1)throw new Error(`Пункт «Не интересно» не найден. Меню: ${items.map(i=>i.innerText.trim()).join(' | ').slice(0,350)}`);
+      return matches[0];
+    };
     const mainText=(card,preview)=>{
       const compact=value=>String(value||'').toLowerCase().replace(/\s+/g,'');
       const expected=compact(preview).slice(0,80);
@@ -37,7 +59,7 @@ export async function xPage(op,payload={}) {
     const requireTarget=()=>{
       const p=payload.post;
       if(!p || !/^\d+$/.test(p.id) || !/^[a-z0-9_]{1,15}$/.test(p.author))throw new Error('Некорректная цель');
-      if(!['post','follow'].includes(payload.kind) && location.pathname!==`/${p.author}/status/${p.id}`)throw new Error('Адрес целевого поста изменился');
+      if(!['post','follow','notInterested'].includes(payload.kind) && location.pathname!==`/${p.author}/status/${p.id}`)throw new Error('Адрес целевого поста изменился');
     };
     const visible=el=>!!el && el.getClientRects().length>0;
     const noteEditor=(phase,index,editor)=>{
@@ -94,6 +116,11 @@ export async function xPage(op,payload={}) {
       if(!identity())throw new Error('Аккаунт больше не подтверждён');
       const {kind,post,text}=payload;let button;
       if(kind==='like') {requireTarget();const card=cardFor(post.id);if(!card)throw new Error('Пост исчез');button=unique('[data-testid="like"]',card);}
+      else if(kind==='notInterested'){
+        requireTarget();if(!forYouActive())throw new Error('Открыта не лента For you');
+        const card=feedCardFor(post);if(!card)throw new Error('Пост исчез из For you');if(!feedTextMatches(card,post.preview))throw new Error('Текст поста не совпал с превью');
+        button=feedbackItem();
+      }
       else if(kind==='follow') {requireTarget();if(location.pathname.toLowerCase()!==`/${post.author}`)throw new Error('Открыт другой профиль');button=unique('[data-testid$="-follow"]',followHeader());}
       else if(kind==='reply'||kind==='post') {
         if(kind==='reply') {
@@ -110,6 +137,10 @@ export async function xPage(op,payload={}) {
     }
     const account=await wait(identity,'ссылка профиля текущего аккаунта');
     if(op==='status')return {ok:true,data:{account}};
+    if(op==='visible'){
+      if(!forYouActive())throw new Error('Открыта не лента For you');
+      return {ok:true,data:[...new Set([...document.querySelectorAll('article[data-testid="tweet"]')].map(card=>directTime(card)?.closest('a')?.getAttribute('href')?.match(/^\/[A-Za-z0-9_]{1,15}\/status\/(\d+)$/)?.[1]).filter(Boolean))].slice(0,100)};
+    }
     if(op==='editor-check'){
       const {kind,post,expected}=payload;
       if(!['reply','post'].includes(kind)||typeof expected!=='string')throw new Error('Некорректная проверка редактора');
@@ -141,9 +172,9 @@ export async function xPage(op,payload={}) {
       for(let n=0;n<6 && results.size<payload.limit;n++) {
         blocked();if(identity()!==account)throw new Error('Аккаунт изменился');
         for(const card of document.querySelectorAll('article[data-testid="tweet"]')) {
-          const href=card.querySelector('time')?.closest('a')?.getAttribute('href');
+          const href=directTime(card)?.closest('a')?.getAttribute('href');
           const match=href?.match(/^\/([A-Za-z0-9_]{1,15})\/status\/(\d+)$/);
-          const text=card.querySelector('[data-testid="tweetText"]')?.innerText;
+          const text=directText(card)?.innerText;
           if(!match || !text || card.querySelector('[data-testid="placementTracking"]') || match[1].toLowerCase()===account)continue;
           results.set(match[2],{id:match[2],author:match[1].toLowerCase(),url:`https://x.com/${match[1].toLowerCase()}/status/${match[2]}`,preview:text.slice(0,payload.previewChars)});
         }
@@ -165,6 +196,14 @@ export async function xPage(op,payload={}) {
     if(op==='prepare') {
       const {kind,post,text}=payload;
       if(kind==='like'){requireTarget();const card=await wait(()=>cardFor(post.id),`пост ${post.id} перед лайком`);if(card.querySelector('[data-testid="unlike"]'))return {ok:true,data:{already:true,detail:'Лайк уже установлен'}};unique('[data-testid="like"]',card);}
+      else if(kind==='notInterested'){
+        requireTarget();if(!forYouActive())throw new Error('Открыта не лента For you');
+        const card=feedCardFor(post);if(!card)throw new Error('Пост исчез из For you');if(!feedTextMatches(card,post.preview))throw new Error('Текст поста не совпал с превью');
+        const caret=[...card.querySelectorAll('[data-testid="caret"]')].filter(el=>el.closest('article[data-testid="tweet"]')===card);
+        if(caret.length!==1)throw new Error('Меню целевого поста не найдено');
+        caret[0].click();await wait(()=>[...document.querySelectorAll('[role="menu"]')].find(visible),'меню поста');
+        feedbackItem();
+      }
       else if(kind==='follow'){requireTarget();if(location.pathname.toLowerCase()!==`/${post.author}`)throw new Error('Открыт другой профиль');await wait(()=>document.querySelector('[data-testid="userActions"]'),'кнопки профиля автора');const header=followHeader();if(header.querySelector('[data-testid$="-unfollow"]'))return {ok:true,data:{already:true,detail:'Подписка уже есть'}};unique('[data-testid$="-follow"]',header);}
       else if(kind==='reply'||kind==='post') {
         if(kind==='reply'&&!composerDialog(kind,post)){requireTarget();const card=await wait(()=>cardFor(post.id),`пост ${post.id} перед ответом`);unique('[data-testid="reply"]',card).click();}
@@ -179,6 +218,14 @@ export async function xPage(op,payload={}) {
     }
     if(op==='receipt') {
       if(payload.kind==='like'){await wait(()=>cardFor(payload.post.id)?.querySelector('[data-testid="unlike"]'),'подтверждение лайка');return {ok:true,data:{detail:'Лайк подтверждён интерфейсом X'}};}
+      if(payload.kind==='notInterested'){
+        await wait(()=>{
+          const card=feedCardFor(payload.post);
+          const toast=document.querySelector('[data-testid="toast"]')?.innerText||'';
+          return !card || /not interested|fewer posts like this|не интерес|меньше подобных/i.test(toast) ? true : null;
+        },'подтверждение пометки «Не интересно»');
+        return {ok:true,data:{detail:'Пост скрыт из For you'}};
+      }
       if(payload.kind==='follow'){await wait(()=>followHeader().querySelector('[data-testid$="-unfollow"]'),'подтверждение подписки');return {ok:true,data:{detail:'Подписка подтверждена интерфейсом X'}};}
       const link=await wait(()=>document.querySelector('[data-testid="toast"] a[href*="/status/"]'),'ссылка на опубликованный ответ');
       return {ok:true,data:{detail:'Опубликовано: '+link.href}};

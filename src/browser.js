@@ -63,10 +63,10 @@ export class XBrowser {
     for(let round=0;round<6 && found.size<limit;round++) {
       checkAbort(signal);
       const rows=await this.feed.locator('article[data-testid="tweet"]').evaluateAll((cards,{chars})=>cards.map(card=>{
-        const time=card.querySelector('time');
+        const time=[...card.querySelectorAll('time')].find(t=>t.closest('article[data-testid="tweet"]')===card);
         const link=time?.closest('a');
         const match=link?.getAttribute('href')?.match(/^\/([A-Za-z0-9_]+)\/status\/(\d+)$/);
-        const text=card.querySelector('[data-testid="tweetText"]')?.innerText || '';
+        const text=[...card.querySelectorAll('[data-testid="tweetText"]')].find(t=>t.closest('article[data-testid="tweet"]')===card)?.innerText || '';
         const ad=!!card.querySelector('[data-testid="placementTracking"]') || /^(Ad|Реклама|Promoted)$/.test(card.querySelector('[data-testid="socialContext"]')?.innerText || '');
         return match && !ad && text ? {id:match[2],author:match[1].toLowerCase(),url:`https://x.com/${match[1]}/status/${match[2]}`,preview:text.slice(0,chars),hasMedia:!!card.querySelector('[data-testid="tweetPhoto"],video')} : null;
       }).filter(Boolean),{chars:previewChars});
@@ -74,6 +74,45 @@ export class XBrowser {
       if(found.size<limit) { await this.feed.mouse.wheel(0,700); await this.feed.waitForTimeout(1000); }
     }
     return [...found.values()].slice(0,limit);
+  }
+  async visiblePostIds(signal){
+    checkAbort(signal);await this.ready();
+    if(new URL(this.feed.url()).pathname!=='/home')throw new BrowserAttention('Открыта не лента For you');
+    const selected=await this.feed.getByRole('tab',{name:/^(For you|Для вас)$/i}).getAttribute('aria-selected');
+    if(selected!=='true')throw new BrowserAttention('Вкладка For you не выбрана');
+    return this.feed.locator('article[data-testid="tweet"]').evaluateAll(cards=>[...new Set(cards.map(card=>[...card.querySelectorAll('time')].find(t=>t.closest('article[data-testid="tweet"]')===card)?.closest('a')?.getAttribute('href')?.match(/^\/[A-Za-z0-9_]{1,15}\/status\/(\d+)$/)?.[1]).filter(Boolean))].slice(0,100));
+  }
+  async notInterested(post,signal){
+    statusUrl(post.url);checkAbort(signal);await this.ready();
+    if(new URL(this.feed.url()).pathname!=='/home')throw new BrowserAttention('Открыта не лента For you');
+    const selected=await this.feed.getByRole('tab',{name:/^(For you|Для вас)$/i}).getAttribute('aria-selected');
+    if(selected!=='true')throw new BrowserAttention('Вкладка For you не выбрана');
+    const card=this.feed.locator('article[data-testid="tweet"]').filter({has:this.feed.locator(`a[href="/${post.author}/status/${post.id}"] time`)});
+    if(await card.count()!==1)throw new BrowserAttention('Целевой пост исчез из For you или показан неоднозначно');
+    const identity=await card.evaluate(el=>[...el.querySelectorAll('time')].find(t=>t.closest('article[data-testid="tweet"]')===el)?.closest('a')?.getAttribute('href')?.toLowerCase());
+    if(identity!==`/${post.author}/status/${post.id}`)throw new BrowserAttention('Целевой пост не является основным постом карточки');
+    const text=await card.evaluate(el=>[...el.querySelectorAll('[data-testid="tweetText"]')].find(t=>t.closest('article[data-testid="tweet"]')===el)?.innerText||'');
+    const compact=value=>String(value||'').toLowerCase().replace(/\s+/g,'');
+    if(!post.preview || !compact(text).startsWith(compact(post.preview).slice(0,80)))throw new BrowserAttention('Текст поста в ленте не совпал с превью');
+    const caret=card.locator('[data-testid="caret"]');
+    if(await caret.count()!==1)throw new BrowserAttention('Меню целевого поста неоднозначно');
+    await caret.click();
+    const menu=this.feed.getByRole('menu');await menu.waitFor({timeout:10000});
+    if(await menu.count()!==1)throw new BrowserAttention('Меню X неоднозначно');
+    const item=menu.getByRole('menuitem',{name:/^(Not interested in this post|Не интересует этот пост|Не интересно|Неинтересно)$/i});
+    if(await item.count()!==1)throw new BrowserAttention('В меню нет пункта «Не интересно»');
+    let mayHaveActed=false;
+    try{
+      await this.ready();checkAbort(signal);mayHaveActed=true;
+      await item.click();
+      await this.feed.waitForFunction(({id,author})=>{
+        const href=`/${author}/status/${id}`;
+        const present=[...document.querySelectorAll('article[data-testid="tweet"]')].some(card=>[...card.querySelectorAll('time')].find(t=>t.closest('article[data-testid="tweet"]')===card)?.closest('a')?.getAttribute('href')?.toLowerCase()===href);
+        const toast=document.querySelector('[data-testid="toast"]')?.innerText||'';
+        return !present || /not interested|fewer posts like this|не интерес|меньше подобных/i.test(toast);
+      },{id:post.id,author:post.author},{timeout:15000});
+      return 'Пост скрыт из For you';
+    }catch(e){e.mayHaveActed=mayHaveActed;throw e;}
   }
   async card(page,id) {
     const cards=page.locator('article[data-testid="tweet"]').filter({has:page.locator(`a[href$="/status/${id}"] time`)});
@@ -120,6 +159,7 @@ export class XBrowser {
   }
   async perform(kind,post,text,signal) {
     checkAbort(signal);
+    if(kind==='notInterested')return this.notInterested(post,signal);
     const page=await this.context.newPage();
     let mayHaveActed=false;
     try {

@@ -28,6 +28,14 @@ export function selectReads(ranked, config) {
   return selected;
 }
 
+export function selectNotInterested(ranked,selected,config,visibleIds) {
+  if(!config.actions.notInterested || config.actions.notInterestedBelow<=0)return [];
+  const selectedIds=new Set(selected.map(p=>p.id));
+  const visible=new Set(visibleIds);
+  return ranked.filter(p=>p.score<config.actions.notInterestedBelow && !selectedIds.has(p.id) && !p.explore && visible.has(p.id))
+    .sort((a,b)=>a.score-b.score);
+}
+
 export function validatePublicText(text) {
   const clean = text.trim();
   if(!clean) throw new Error('Пустой текст публикации');

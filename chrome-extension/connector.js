@@ -44,11 +44,12 @@ async function run(task){
   try {
     if(task.op==='status'){mark('Проверяю аккаунт X');return done(await inject('status',p));}
     if(task.op==='scan') {mark('Открываю For you');await navigate('https://x.com/home');mark('Собираю посты из For you');return done(await inject('scan',p));}
+    if(task.op==='visible'){mark('Проверяю посты, оставшиеся в For you');return done(await inject('visible',p));}
     if(task.op==='read'){mark(`Открываю пост @${p.post.author} (${p.post.id})`);await navigate(p.post.url);mark(`Читаю пост @${p.post.author} (${p.post.id})`);return done(await inject('read',p));}
     if(task.op!=='perform')throw new Error('Неизвестная команда соединителя');
-    const destination=p.kind==='post'?'https://x.com/compose/post':p.kind==='follow'?`https://x.com/${p.post.author}`:p.post.url;
+    const destination=p.kind==='notInterested'?'https://x.com/home':p.kind==='post'?'https://x.com/compose/post':p.kind==='follow'?`https://x.com/${p.post.author}`:p.post.url;
     mark(`Открываю цель действия ${p.kind}: ${destination}`);
-    await navigate(destination);
+    if(p.kind==='notInterested')await target();else await navigate(destination);
     mark(`Готовлю действие ${p.kind} для @${p.post.author||'своего аккаунта'}`);
     const prepared=await inject('prepare',p);diagnostics=prepared.diagnostics||null;if(prepared.already)return done({detail:prepared.detail});
     if(p.kind==='reply'||p.kind==='post'){mark(`Ввожу текст ${p.kind} посимвольно`);diagnostics=await typeThroughBrowser(p,diagnostics);}
@@ -80,7 +81,7 @@ async function loop(){
 }
 $('#pair-form').addEventListener('submit',async e=>{
   e.preventDefault();$('#pair').disabled=true;
-  try{await target();const identity=await inject('status',{});const pair=await request('pair',{code:$('#code').value.trim(),version:10});token=pair.token;stopped=false;$('#code').value='';$('#status').textContent=`Подключено: @${identity.account}`;$('#disconnect').disabled=false;log(`Выбрана вкладка @${identity.account}`);loop();}
+  try{await target();const identity=await inject('status',{});const pair=await request('pair',{code:$('#code').value.trim(),version:11});token=pair.token;stopped=false;$('#code').value='';$('#status').textContent=`Подключено: @${identity.account}`;$('#disconnect').disabled=false;log(`Выбрана вкладка @${identity.account}`);loop();}
   catch(e){$('#status').textContent=e.message;$('#pair').disabled=false;}
 });
 $('#disconnect').addEventListener('click',async()=>{stopped=true;try{await request('disconnect');}catch{}token=null;$('#pair').disabled=false;$('#disconnect').disabled=true;$('#status').textContent='Отключено. Вкладка X оставлена открытой.';});

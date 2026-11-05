@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ConfigSchema, DEFAULT_CONFIG } from '../src/config.js';
 import { Store } from '../src/store.js';
-import { rankPreviews, selectReads, validatePublicText, proposeActions } from '../src/ranking.js';
+import { rankPreviews, selectReads, selectNotInterested, validatePublicText, proposeActions } from '../src/ranking.js';
 import { statusUrl } from '../src/browser.js';
 import { Engine } from '../src/engine.js';
 import { ExtensionBridge, ExtensionBrowser } from '../src/extension-bridge.js';
@@ -22,6 +22,9 @@ test('config validates limits, protocols and duplicate topics',()=>{
   const c=config();c.model.url='file:///C:/secret';assert.throws(()=>ConfigSchema.parse(c));
   const c2=config();c2.topics.push(c2.topics[0]);assert.throws(()=>ConfigSchema.parse(c2));
   const c3=config();c3.actions.minGapSeconds=-1;assert.throws(()=>ConfigSchema.parse(c3));
+  const old=config();delete old.actions.notInterested;delete old.actions.notInterestedBelow;delete old.actions.maxNotInterestedDay;
+  const migrated=ConfigSchema.parse(old);assert.equal(migrated.actions.notInterested,true);assert.equal(migrated.actions.notInterestedBelow,0.4);
+  const invalid=config();invalid.actions.notInterestedBelow=1.1;assert.throws(()=>ConfigSchema.parse(invalid));
 });
 test('preview ranking uses only matching interest weights and rejects duplicate indices',()=>{
   const c=config(),posts=[makePost('1'),makePost('2')],topics=makeStore().topics();
@@ -35,6 +38,13 @@ test('exploration reserves space without reading the whole batch',()=>{
   const c=config();c.reading.fullReads=2;
   const ranked=[{id:'a',score:.9},{id:'b',score:.8},{id:'new',score:.2,explore:true}];
   assert.deepEqual(selectReads(ranked,c).map(p=>p.id),['a','new']);
+});
+test('negative feedback uses the configured score threshold and protects selected or exploratory posts',()=>{
+  const c=config();c.actions.notInterestedBelow=.4;
+  const ranked=[{id:'low',score:.22},{id:'edge',score:.4},{id:'read',score:.1},{id:'explore',score:.15,explore:true},{id:'offscreen',score:.05}];
+  assert.deepEqual(selectNotInterested(ranked,[ranked[2]],c,['low','edge','read','explore']).map(p=>p.id),['low']);
+  c.actions.notInterestedBelow=.1;assert.equal(selectNotInterested(ranked,[],c,['low']).length,0);
+  c.actions.notInterested=false;assert.equal(selectNotInterested(ranked,[],c,['low']).length,0);
 });
 test('one post cannot duplicate author memory or interest updates',()=>{
   const s=makeStore();addRead(s);const before=s.author('author');const weight=s.topics().find(t=>t.name==='Локальные ИИ-модели').weight;
@@ -88,6 +98,16 @@ test('daily budgets, warmup, author cooldown and unresolved actions are enforced
   assert.equal(s.canAct('reply','a',c,Date.now()+181000),'Автор уже получил ответ за последние 24 часа');
   const pending=s.action('follow','b','b','');assert.equal(s.canAct('post','',c),'Есть действие без подтверждённого результата');
   s.finishAction(pending,'unknown','timeout');assert.equal(s.canAct('post','',c),'Есть действие без подтверждённого результата');s.close();
+});
+test('negative feedback has its own daily cap and cooldown without blocking replies',()=>{
+  const s=makeStore(),c=config();c.actions.maxNotInterestedDay=1;
+  assert.equal(s.canAct('notInterested','a',c),null);
+  const post=makePost('89');s.rememberPreview(post,.2,'не интересно',false);
+  const id=s.action('notInterested',post.id,post.author,'');s.finishAction(id,'success','hidden');s.markNotInterested(post.id);
+  assert.equal(s.get('SELECT status FROM posts WHERE id=?',post.id).status,'not_interested');
+  assert.equal(s.canAct('notInterested','b',c),'Лимит за 24 часа');
+  assert.equal(s.canAct('reply','b',c),'Знакомство с лентой');
+  c.actions.warmupReads=0;assert.equal(s.canAct('reply','b',c),null);s.close();
 });
 test('action ledger deduplicates repeated submissions and survives restart',()=>{
   const dir=mkdtempSync(path.join(os.tmpdir(),'persona-test-'));const file=path.join(dir,'memory.sqlite');

@@ -8,7 +8,7 @@ let state=null,mode='demo',tab='overview',initialized=false,loading=false,active
 let toastTimer;
 const dataset=()=>mode==='demo'?'demo':'live';
 const titles={overview:['Сначала интерес.<br><span>Потом разговор.</span>','Наблюдай, что привлекает персонажа и почему он решает ответить.'],persona:['Свой характер.<br><span>Свой голос.</span>','Биография задаёт основу. Новые впечатления постепенно меняют отношение к миру.'],interests:['Что цепляет.<br><span>Что меняется.</span>','Новые темы, привычные увлечения и история обучения на прочитанном.'],memory:['Не просто ник.<br><span>История встреч.</span>','Каждая заметка опирается на прочитанный пост. Впечатления могут меняться.'],actions:['От впечатления<br><span>к действию.</span>','Что персонаж решил сделать и какой результат удалось подтвердить.'],settings:['Твоя модель.<br><span>Твои настройки.</span>','Подключение к Ollama, отдельный браузер и темп работы персонажа.']};
-const kindLabel={reply:'Ответ',like:'Лайк',follow:'Подписка',post:'Публикация'};
+const kindLabel={reply:'Ответ',like:'Лайк',follow:'Подписка',post:'Публикация',notInterested:'Не интересно'};
 const statusLabel={success:'Подтверждено',pending:'Выполняется',unknown:'Нужно проверить',failed:'Не выполнено'};
 
 function toast(message,error=false){clearTimeout(toastTimer);$('#toast').hidden=false;$('#toast').className=error?'error':'';$('#toast').textContent=message;toastTimer=setTimeout(()=>$('#toast').hidden=true,error?10000:5000);}
@@ -47,7 +47,7 @@ function render(){
   for(const name of ['seen','read','authors','actions'])$(`#metric-${name}`).textContent=state.counts[name];
   $('#metric-ratio').textContent=state.counts.seen?`${Math.round(state.counts.read/state.counts.seen*100)}% от просмотренного`:'отбор ещё не начат';
   $('#interest-bars').innerHTML=state.topics.slice(0,7).map(t=>`<div class="interest-row"><div><span>${esc(t.name)}</span><strong>${percent(t.weight)}</strong></div><div class="bar"><span style="width:${percent(t.weight)}"></span></div></div>`).join('');
-  if(state.posts.length)$('#feed-list').innerHTML=state.posts.map(p=>`<article class="post ${p.status==='skipped'?'skipped':''}"><div class="post-top"><strong>@${esc(p.author)}</strong><span class="status">${{skipped:'пропущен',selected:'выбран',read:'прочитан'}[p.status]||esc(p.status)}</span><span class="score">${percent(p.score)} интерес</span></div><p>${esc(p.preview)}</p><div class="reason">${esc(p.analysis?.reason||p.reason)}</div>${p.body?`<details><summary>Полный текст и решение</summary><p>${esc(p.body)}</p><p>Согласие: ${Math.round(p.analysis.agreement*100)}% · Ценность: ${percent(p.analysis.value)} · Желание ответить: ${percent(p.analysis.replyDesire)}</p></details>`:''}</article>`).join('');
+  if(state.posts.length)$('#feed-list').innerHTML=state.posts.map(p=>`<article class="post ${['skipped','not_interested'].includes(p.status)?'skipped':''}"><div class="post-top"><strong>@${esc(p.author)}</strong><span class="status">${{skipped:'пропущен',selected:'выбран',read:'прочитан',not_interested:'не интересно'}[p.status]||esc(p.status)}</span><span class="score">${percent(p.score)} интерес</span></div><p>${esc(p.preview)}</p><div class="reason">${esc(p.analysis?.reason||p.reason)}</div>${p.body?`<details><summary>Полный текст и решение</summary><p>${esc(p.body)}</p><p>Согласие: ${Math.round(p.analysis.agreement*100)}% · Ценность: ${percent(p.analysis.value)} · Желание ответить: ${percent(p.analysis.replyDesire)}</p></details>`:''}</article>`).join('');
   else $('#feed-list').innerHTML='<div class="empty"><div class="empty-symbol">⌁</div><h3>Здесь появится ход чтения</h3><p>Запусти одну пачку. Модель выберет посты по интересам и создаст первые заметки.</p></div>';
   $('#events').innerHTML=state.events.length?state.events.map(e=>`<div class="event ${esc(e.level)}"><time>${time(e.created)}</time><span>${esc(e.text)}${e.data?`<details class="event-details"><summary>Подробности</summary><pre>${esc(JSON.stringify(JSON.parse(e.data),null,2))}</pre></details>`:''}</span></div>`).join(''):'<p class="muted">Событий пока нет.</p>';
   if(state.model){$('#model-speed').textContent=`Последний запрос: ${state.model.seconds} с · ${state.model.answerTokens||0} токенов` ;$('#model-label').textContent='Модель · подключена';$('#model-dot').classList.add('online');}
@@ -69,7 +69,7 @@ function renderActions(){
 }
 function fillForms(){
   for(const el of $('#persona-form').elements)if(el.name)el.value=state.config.persona[el.name];
-  for(const el of $('#settings-form').elements)if(el.name){const [group,key]=el.name.split('.');if(el.type==='checkbox')el.checked=state.config[group][key];else el.value=state.config[group][key];}
+  for(const el of $('#settings-form').elements)if(el.name){const [group,key]=el.name.split('.');if(el.type==='checkbox')el.checked=state.config[group][key];else el.value=el.dataset.percent?Math.round(state.config[group][key]*100):state.config[group][key];}
   renderConnection();
 }
 function renderConnection(){
@@ -97,7 +97,7 @@ $('#pair-extension').addEventListener('click',e=>action(async()=>{
   $('#pair-hint').textContent='Введи этот код во вкладке соединителя. Код действует 5 минут.';
 },e.currentTarget));
 $('#persona-form').addEventListener('submit',e=>{e.preventDefault();action(async()=>{const next=structuredClone(state.config);for(const el of e.target.elements)if(el.name)next.persona[el.name]=el.value;await api('/api/config',next);toast('Личность сохранена');},e.submitter);});
-$('#settings-form').addEventListener('submit',e=>{e.preventDefault();action(async()=>{const next=structuredClone(state.config);for(const el of e.target.elements)if(el.name){const [group,key]=el.name.split('.');next[group][key]=el.type==='checkbox'?el.checked:el.type==='number'?Number(el.value):el.value;}await api('/api/config',next);toast('Настройки сохранены');},e.submitter);});
+$('#settings-form').addEventListener('submit',e=>{e.preventDefault();action(async()=>{const next=structuredClone(state.config);for(const el of e.target.elements)if(el.name){const [group,key]=el.name.split('.');next[group][key]=el.type==='checkbox'?el.checked:el.dataset.percent?Number(el.value)/100:el.type==='number'?Number(el.value):el.value;}await api('/api/config',next);toast('Настройки сохранены');},e.submitter);});
 $('#topics-form').addEventListener('submit',e=>{e.preventDefault();action(async()=>{const next=structuredClone(state.config);next.topics=$$('.topic-edit').map(row=>({name:row.querySelector('.topic-name').value.trim(),weight:Number(row.querySelector('.topic-weight').value),keywords:row.querySelector('.topic-keywords').value.split(',').map(s=>s.trim()).filter(Boolean),pinned:row.querySelector('.topic-pinned').checked}));await api('/api/config',next);toast('Интересы сохранены');},e.submitter);});
 $('#add-topic').addEventListener('click',()=>$('#topic-editor').insertAdjacentHTML('beforeend',topicRow({name:'',weight:0.5,keywords:[],pinned:false})));
 $('#topic-editor').addEventListener('click',e=>{const b=e.target.closest('.remove-topic');if(b)b.closest('.topic-edit').remove();});

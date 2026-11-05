@@ -1,5 +1,5 @@
 import { PreviewSchema, ReadSchema, TextSchema } from './model.js';
-import { rankPreviews, selectReads, validatePublicText, proposeActions } from './ranking.js';
+import { rankPreviews, selectReads, selectNotInterested, validatePublicText, proposeActions } from './ranking.js';
 import { DEMO_POSTS } from './demo.js';
 import { normalizeHandle } from './browser.js';
 
@@ -79,6 +79,20 @@ export class Engine {
     for(const p of ranked) store.rememberPreview(p,p.score,p.reason,selected.some(s=>s.id===p.id));
     store.event(`Просмотрено начал: ${posts.length}. Выбрано для чтения: ${selected.length}.`);
     for(const p of selected)store.event(`Выбран @${p.author} (${Math.round(p.score*100)}%): ${p.reason}`,'info',{url:p.url,postId:p.id,preview:p.preview});
+    if(this.status.mode!=='observe' && c.actions.notInterested && c.actions.notInterestedBelow>0 && !store.canAct('notInterested','',c)){
+      const visible=this.status.mode==='demo'?posts.map(p=>p.id):await this.browser.visiblePostIds(signal);
+      const candidate=selectNotInterested(ranked,selected,c,visible)[0];
+      if(candidate && !store.get("SELECT id FROM actions WHERE kind='notInterested' AND target=?",candidate.id)){
+        store.event(`Не интересно: @${candidate.author} (${Math.round(candidate.score*100)}%): ${candidate.reason}`,'info',{url:candidate.url,postId:candidate.id,threshold:c.actions.notInterestedBelow});
+        try {
+          await this.execute('notInterested',candidate,'',signal);
+          if(store.get("SELECT status FROM actions WHERE kind='notInterested' AND target=?",candidate.id)?.status==='success')store.markNotInterested(candidate.id);
+        } catch(e) {
+          if(e.mayHaveActed)throw e;
+          store.event(`Пометка «Не интересно» пропущена: ${e.message}`,'warning',{url:candidate.url,postId:candidate.id});
+        }
+      }
+    }
     for(const preview of selected) {
       signal.throwIfAborted();
       this.status.phase=`Читаю @${preview.author}`;
@@ -146,7 +160,7 @@ export class Engine {
     await this.execute('post',{id:`own-${store.readCount()}`,author:'',url:''},text,signal);
     store.setState('lastPostReadCount',store.readCount());
   }
-  kindName(kind) {return {reply:'Ответ',like:'Лайк',follow:'Подписка',post:'Публикация'}[kind];}
+  kindName(kind) {return {reply:'Ответ',like:'Лайк',follow:'Подписка',post:'Публикация',notInterested:'Пометка «Не интересно»'}[kind];}
   async execute(kind,post,text,signal) {
     signal.throwIfAborted();
     const store=this.store;
@@ -163,7 +177,9 @@ export class Engine {
     } catch(e) {
       store.finishAction(id,e.mayHaveActed?'unknown':'failed',e.message);
       store.event(`${this.kindName(kind)} №${id}: ${e.message}`,'error',{actionId:id,kind,target,url:post.url||null,mayHaveActed:!!e.mayHaveActed});
-      throw new Error(e.mayHaveActed?'Результат действия не подтверждён. Проверь X и отметь результат в журнале действий; повторять автоматически не будем.':e.message);
+      const error=new Error(e.mayHaveActed?'Результат действия не подтверждён. Проверь X и отметь результат в журнале действий; повторять автоматически не будем.':e.message);
+      error.mayHaveActed=!!e.mayHaveActed;
+      throw error;
     }
   }
 }

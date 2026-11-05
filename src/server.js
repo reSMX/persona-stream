@@ -56,7 +56,7 @@ app.get('/api/state',(req,res)=>res.json({config:config.value,status:engine.stat
 app.post('/api/browser/pair-code',(req,res)=>{idle();res.json({...bridge.pairingCode(),extensionPath:path.join(ROOT,'chrome-extension')});});
 app.post('/bridge/pair',(req,res)=>{
   idle();const code=z.string().regex(/^\d{6}$/).parse(req.body.code);
-  if(req.body.version!==10)return res.status(409).json({error:'Обнови расширение Persona Stream в chrome://extensions и подключи вкладку X заново.'});
+  if(req.body.version!==11)return res.status(409).json({error:'Обнови расширение Persona Stream в chrome://extensions и подключи вкладку X заново.'});
   res.json(bridge.pair(code,String(req.headers['x-extension-id']||'')));
 });
 app.use('/bridge',(req,res,next)=>{
