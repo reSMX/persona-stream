@@ -33,7 +33,7 @@ test('reply composer can be a full page without a dialog role',async()=>{
   const link={getAttribute:()=>`/demo_author/status/${id}`};
   const button={disabled:false,getClientRects:()=>[{}],getAttribute:()=>null,click:()=>{clicks++;}};
   const root={innerText:`@demo_author ${original}`,querySelectorAll:selector=>selector==='a[href*="/status/"]'?[link]:selector==='[data-testid="tweetTextarea_0"]'?[editor]:selector==='[data-testid="tweetButton"]'?[button]:[],querySelector:selector=>selector==='[data-testid="tweetText"]'?{innerText:original}:null};
-  const editor={innerText:reply,parentElement:root,getClientRects:()=>[{}],focus(){},closest:()=>null};
+  const editor={innerText:reply,parentElement:root,getClientRects:()=>[{}],focus(){},closest:selector=>selector==='[aria-hidden="true"]'?{}:null};
   const profile={getAttribute:()=>'/bot_example'};
   globalThis.location={origin:'https://x.com',pathname:'/compose/post',href:'https://x.com/compose/post'};
   globalThis.document={body:{},querySelector:selector=>selector==='[data-testid="AppTabBar_Profile_Link"]'?profile:null,querySelectorAll:selector=>selector==='[role="dialog"]'?[]:selector==='[data-testid="tweetTextarea_0"]'?[editor]:[]};

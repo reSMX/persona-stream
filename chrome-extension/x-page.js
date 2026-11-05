@@ -109,7 +109,9 @@ export async function xPage(op,payload={}) {
       for(const editor of document.querySelectorAll('[data-testid="tweetTextarea_0"]')){
         // X may render the editable host with display: contents, which gives
         // it no client rect even though its children are visible and usable.
-        if(editor.closest('[aria-hidden="true"]'))continue;
+        // It can also set aria-hidden on the surrounding page while the
+        // composer is open. Require the exact target and one editor/button
+        // instead of using that accessibility flag as a visibility test.
         for(let root=editor.parentElement;root && root!==document.body;root=root.parentElement){
           if(root.querySelectorAll('[data-testid="tweetTextarea_0"]').length!==1)break;
           if(root.querySelectorAll('[data-testid="tweetButton"]').length!==1)continue;
