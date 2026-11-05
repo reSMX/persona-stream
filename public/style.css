@@ -5,3 +5,13 @@
 .event-details{margin-top:6px;color:var(--muted)}
 .event-details summary{cursor:pointer;font-size:10px;color:var(--green)}
 .event-details pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:10px;max-height:240px;overflow:auto;margin:6px 0 0}
+.sidebar{overflow-y:auto}
+.token-usage{border:1px solid #364731;background:#1b271d;border-radius:12px;padding:12px 13px;margin:0 0 16px;font-variant-numeric:tabular-nums}
+.token-usage-heading{display:flex;align-items:center;justify-content:space-between;gap:7px}
+.token-usage-heading>span:last-child{font-size:9px;color:var(--green);letter-spacing:.8px}
+.token-usage>strong{display:block;color:var(--green);font-size:27px;line-height:1.15;margin:9px 0 2px;overflow-wrap:anywhere}
+.token-usage-day{font-size:10px;color:var(--muted)}
+.token-usage-detail{display:flex;justify-content:space-between;gap:8px;border-top:1px solid var(--line);margin-top:11px;padding-top:9px;font-size:10px;color:var(--muted)}
+.token-usage-detail b{font-weight:600;color:var(--text)}
+.token-usage>small{display:block;color:var(--orange);font-size:9px;margin-top:7px}
+.token-usage>small[hidden]{display:none}

@@ -2,6 +2,7 @@ const $=selector=>document.querySelector(selector);
 const $$=selector=>[...document.querySelectorAll(selector)];
 const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const percent=value=>`${Math.round((value||0)*100)}%`;
+const number=value=>new Intl.NumberFormat('ru-RU').format(value||0);
 const time=value=>new Date(value).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
 const date=value=>new Date(value).toLocaleString('ru-RU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
 let state=null,mode='demo',tab='overview',initialized=false,loading=false,activeAuthor=null;
@@ -19,7 +20,7 @@ async function api(url,body){
 async function action(fn,button){if(button)button.disabled=true;try{await fn();await refresh();}catch(e){toast(e.message,true);}finally{if(button)button.disabled=false;renderStatus();}}
 async function refresh(){
   if(loading)return;loading=true;
-  try{state=await api(`/api/state?dataset=${dataset()}`);if(state.status.running||state.status.busy)mode=state.status.mode;render();if(!initialized){fillForms();initialized=true;}}
+  try{const selected=dataset();const [next,usage]=await Promise.all([api(`/api/state?dataset=${selected}`),api(`/api/usage?dataset=${selected}`)]);state=next;state.usage24=usage.last24Hours;if(state.status.running||state.status.busy)mode=state.status.mode;render();if(!initialized){fillForms();initialized=true;}}
   catch(e){$('#phase').textContent='Панель потеряла связь с приложением';$('#error-box').hidden=false;$('#error-box').textContent=e.message;}
   finally{loading=false;}
 }
@@ -44,10 +45,18 @@ function renderStatus(){
 }
 function render(){
   renderStatus();$('#sidebar-name').textContent=state.config.persona.name;
+  const usage=state.usage||{},day=state.usage24||{};
+  $('#tokens-dataset').textContent=mode==='demo'?'УЧЕБНАЯ':'X';
+  $('#tokens-total').textContent=number(usage.totalTokens);
+  $('#tokens-day').textContent=number(day.totalTokens);
+  $('#tokens-input').textContent=number(usage.promptTokens);
+  $('#tokens-output').textContent=number(usage.answerTokens);
+  $('#tokens-note').hidden=!usage.unmetered;
+  $('#tokens-note').textContent=usage.unmetered?`Без данных Ollama: ${number(usage.unmetered)} запросов`:'';
   for(const name of ['seen','read','authors','actions'])$(`#metric-${name}`).textContent=state.counts[name];
   $('#metric-ratio').textContent=state.counts.seen?`${Math.round(state.counts.read/state.counts.seen*100)}% от просмотренного`:'отбор ещё не начат';
   $('#interest-bars').innerHTML=state.topics.slice(0,7).map(t=>`<div class="interest-row"><div><span>${esc(t.name)}</span><strong>${percent(t.weight)}</strong></div><div class="bar"><span style="width:${percent(t.weight)}"></span></div></div>`).join('');
-  if(state.posts.length)$('#feed-list').innerHTML=state.posts.map(p=>`<article class="post ${['skipped','not_interested'].includes(p.status)?'skipped':''}"><div class="post-top"><strong>@${esc(p.author)}</strong><span class="status">${{skipped:'пропущен',selected:'выбран',read:'прочитан',not_interested:'не интересно'}[p.status]||esc(p.status)}</span><span class="score">${percent(p.score)} интерес</span></div><p>${esc(p.preview)}</p><div class="reason">${esc(p.analysis?.reason||p.reason)}</div>${p.body?`<details><summary>Полный текст и решение</summary><p>${esc(p.body)}</p><p>Согласие: ${Math.round(p.analysis.agreement*100)}% · Ценность: ${percent(p.analysis.value)} · Желание ответить: ${percent(p.analysis.replyDesire)}</p></details>`:''}</article>`).join('');
+  if(state.posts.length)$('#feed-list').innerHTML=state.posts.map(p=>`<article class="post ${['skipped','not_interested','image_skipped'].includes(p.status)?'skipped':''}"><div class="post-top"><strong>@${esc(p.author)}</strong><span class="status">${{skipped:'пропущен',selected:'выбран',read:'прочитан',not_interested:'не интересно',image_skipped:'с изображением'}[p.status]||esc(p.status)}</span><span class="score">${percent(p.score)} интерес</span></div><p>${esc(p.preview)}</p><div class="reason">${esc(p.analysis?.reason||p.reason)}</div>${p.body?`<details><summary>Полный текст и решение</summary><p>${esc(p.body)}</p><p>Согласие: ${Math.round(p.analysis.agreement*100)}% · Ценность: ${percent(p.analysis.value)} · Желание ответить: ${percent(p.analysis.replyDesire)}</p></details>`:''}</article>`).join('');
   else $('#feed-list').innerHTML='<div class="empty"><div class="empty-symbol">⌁</div><h3>Здесь появится ход чтения</h3><p>Запусти одну пачку. Модель выберет посты по интересам и создаст первые заметки.</p></div>';
   $('#events').innerHTML=state.events.length?state.events.map(e=>`<div class="event ${esc(e.level)}"><time>${time(e.created)}</time><span>${esc(e.text)}${e.data?`<details class="event-details"><summary>Подробности</summary><pre>${esc(JSON.stringify(JSON.parse(e.data),null,2))}</pre></details>`:''}</span></div>`).join(''):'<p class="muted">Событий пока нет.</p>';
   if(state.model){$('#model-speed').textContent=`Последний запрос: ${state.model.seconds} с · ${state.model.answerTokens||0} токенов` ;$('#model-label').textContent='Модель · подключена';$('#model-dot').classList.add('online');}
