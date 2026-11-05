@@ -9,9 +9,9 @@ test('reply modal may change the X URL, but exact quoted post and account still 
   const reply='Думаю, сюжет можно повернуть интереснее.';
   const button={disabled:false,getClientRects:()=>[{}],getAttribute:()=>null,click:()=>{clicks++;}};
   const quoted={innerText:original};
-  const editor={innerText:reply,closest:selector=>selector==='[role="dialog"]'?dialog:null};
+  const editor={innerText:reply,getClientRects:()=>[],closest:selector=>selector==='[role="dialog"]'?dialog:null};
   const inlineEditor={innerText:'Unrelated inline draft'};
-  const dialog={innerText:`Example @example_author · 9h\n${original}\nReplying to @example_author`,getClientRects:()=>[{}],querySelector:selector=>selector==='[data-testid="tweetText"]'?quoted:selector==='[data-testid="tweetTextarea_0"]'?editor:null,querySelectorAll:selector=>selector==='[data-testid="tweetButton"]'?[button]:selector==='[data-testid="tweetTextarea_0"]'?[editor]:[]};
+  const dialog={innerText:`Example @example_author · 9h\n${original}\nReplying to @example_author`,getClientRects:()=>[],querySelector:selector=>selector==='[data-testid="tweetText"]'?quoted:selector==='[data-testid="tweetTextarea_0"]'?editor:null,querySelectorAll:selector=>selector==='[data-testid="tweetButton"]'?[button]:selector==='[data-testid="tweetTextarea_0"]'?[editor]:[]};
   const profile={getAttribute:()=>'/bot_example'};
   globalThis.location={origin:'https://x.com',pathname:'/compose/post',href:'https://x.com/compose/post'};
   globalThis.document={querySelector:selector=>selector==='[data-testid="AppTabBar_Profile_Link"]'?profile:null,querySelectorAll:selector=>selector==='[role="dialog"]'?[dialog]:selector==='[data-testid="tweetTextarea_0"]'?[inlineEditor,editor]:[]};
@@ -24,6 +24,24 @@ test('reply modal may change the X URL, but exact quoted post and account still 
     const otherAccount=await xPage('commit',{...base,account:'somebodyelse'});
     assert.equal(otherAccount.ok,false);assert.equal(otherAccount.mayHaveActed,false);assert.equal(clicks,1);
   } finally {globalThis.location=originalLocation;globalThis.document=originalDocument;}
+});
+
+test('reply composer can be a full page without a dialog role',async()=>{
+  const previousLocation=globalThis.location,previousDocument=globalThis.document;
+  const id='2000000000000000098',original='A fictional post about Japanese writing',reply='Интересная мысль.';
+  let clicks=0;
+  const link={getAttribute:()=>`/demo_author/status/${id}`};
+  const button={disabled:false,getClientRects:()=>[{}],getAttribute:()=>null,click:()=>{clicks++;}};
+  const root={innerText:`@demo_author ${original}`,querySelectorAll:selector=>selector==='a[href*="/status/"]'?[link]:selector==='[data-testid="tweetTextarea_0"]'?[editor]:selector==='[data-testid="tweetButton"]'?[button]:[],querySelector:selector=>selector==='[data-testid="tweetText"]'?{innerText:original}:null};
+  const editor={innerText:reply,parentElement:root,getClientRects:()=>[{}],focus(){},closest:()=>null};
+  const profile={getAttribute:()=>'/bot_example'};
+  globalThis.location={origin:'https://x.com',pathname:'/compose/post',href:'https://x.com/compose/post'};
+  globalThis.document={body:{},querySelector:selector=>selector==='[data-testid="AppTabBar_Profile_Link"]'?profile:null,querySelectorAll:selector=>selector==='[role="dialog"]'?[]:selector==='[data-testid="tweetTextarea_0"]'?[editor]:[]};
+  try{
+    const payload={kind:'reply',post:{id,author:'demo_author',originalText:original},text:reply,account:'bot_example'};
+    const result=await xPage('commit',payload);
+    assert.equal(result.ok,true);assert.equal(clicks,1);
+  }finally{globalThis.location=previousLocation;globalThis.document=previousDocument;}
 });
 
 test('reads the main text when a quote has its own timestamp and tweetText',async()=>{
@@ -54,7 +72,7 @@ test('reads the main text when a quote has its own timestamp and tweetText',asyn
 test('prepares the target editor and verifies browser-typed characters',async()=>{
   const originalLocation=globalThis.location,originalDocument=globalThis.document;
   const id='2000000000000000004';
-  const makeEditor=innerText=>({innerText,closest:selector=>selector==='[role="dialog"]'?dialog:null,focus(){globalThis.document.activeElement=this;},dispatchEvent(){throw new Error('Synthetic input event must not be sent');}});
+  const makeEditor=innerText=>({innerText,getClientRects:()=>[{}],closest:selector=>selector==='[role="dialog"]'?dialog:null,focus(){globalThis.document.activeElement=this;},dispatchEvent(){throw new Error('Synthetic input event must not be sent');}});
   let editor=makeEditor('');
   const dialog={getClientRects:()=>[{}],querySelector:selector=>selector==='[data-testid="tweetTextarea_0"]'?editor:null,querySelectorAll:selector=>selector==='[data-testid="tweetTextarea_0"]'?[editor]:selector==='a[href*="/status/"]'?[{getAttribute:()=>`/demo_author/status/${id}`}]:[]};
   const replyButton={click(){}};

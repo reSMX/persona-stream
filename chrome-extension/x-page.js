@@ -87,7 +87,7 @@ export async function xPage(op,payload={}) {
       // outer overlay and the actual composer are not counted twice.
       const dialogs=[...document.querySelectorAll('[role="dialog"]')].filter(d=>{
         const editor=d.querySelector('[data-testid="tweetTextarea_0"]');
-        return visible(d)&&editor&&editor.closest('[role="dialog"]')===d;
+        return editor&&editor.closest('[role="dialog"]')===d;
       });
       if(kind==='reply'){
         const matching=dialogs.filter(d=>replyMatchesTarget(d,post));
@@ -101,7 +101,24 @@ export async function xPage(op,payload={}) {
         if(dialogs.length){diagnostics.dialogs=dialogs.map(d=>({text:d.innerText?.slice(0,160),html:d.outerHTML?.slice(0,300)}));throw new Error('Окно ответа не совпадает с целевым постом');}
       }
       if(dialogs.length>1){diagnostics.dialogs=dialogs.map(d=>({text:d.innerText?.slice(0,160),html:d.outerHTML?.slice(0,300)}));throw new Error('Открыто несколько окон публикации X');}
-      return dialogs[0]||null;
+      if(dialogs.length)return dialogs[0];
+      // X sometimes renders /compose/post as a page without role="dialog".
+      // Find the smallest ancestor that contains this editor, one publish
+      // button, and the quoted target post.
+      const candidates=[];
+      for(const editor of document.querySelectorAll('[data-testid="tweetTextarea_0"]')){
+        // X may render the editable host with display: contents, which gives
+        // it no client rect even though its children are visible and usable.
+        if(editor.closest('[aria-hidden="true"]'))continue;
+        for(let root=editor.parentElement;root && root!==document.body;root=root.parentElement){
+          if(root.querySelectorAll('[data-testid="tweetTextarea_0"]').length!==1)break;
+          if(root.querySelectorAll('[data-testid="tweetButton"]').length!==1)continue;
+          if(kind==='reply'&&!replyMatchesTarget(root,post))continue;
+          candidates.push(root);break;
+        }
+      }
+      if(candidates.length>1)throw new Error('Несколько полей публикации подходят к целевому посту');
+      return candidates[0]||null;
     };
     const focusEditorEnd=current=>{
       current.focus();
@@ -207,7 +224,20 @@ export async function xPage(op,payload={}) {
       else if(kind==='follow'){requireTarget();if(location.pathname.toLowerCase()!==`/${post.author}`)throw new Error('Открыт другой профиль');await wait(()=>document.querySelector('[data-testid="userActions"]'),'кнопки профиля автора');const header=followHeader();if(header.querySelector('[data-testid$="-unfollow"]'))return {ok:true,data:{already:true,detail:'Подписка уже есть'}};unique('[data-testid$="-follow"]',header);}
       else if(kind==='reply'||kind==='post') {
         if(kind==='reply'&&!composerDialog(kind,post)){requireTarget();const card=await wait(()=>cardFor(post.id),`пост ${post.id} перед ответом`);unique('[data-testid="reply"]',card).click();}
-        let dialog=await wait(()=>composerDialog(kind,post),'окно ответа');
+        let dialog;
+        try{dialog=await wait(()=>composerDialog(kind,post),'окно ответа');}
+        catch(e){
+          const fields=[...document.querySelectorAll('[data-testid="tweetTextarea_0"]')];
+          const layout=fields.map(field=>{
+            const chain=[];for(let node=field.parentElement;node&&chain.length<6;node=node.parentElement)chain.push(`${node.tagName||'?'}:${node.getAttribute?.('role')||''}:${node.getAttribute?.('data-testid')||''}:${node.querySelectorAll?.('[data-testid="tweetButton"],[data-testid="tweetButtonInline"]').length||0}`);
+            return chain.join(' > ');
+          }).join(' | ');
+          const dialogs=[...document.querySelectorAll('[role="dialog"]')].map(d=>({text:d.innerText?.replace(/\s+/g,' ').slice(0,180),editor:!!d.querySelector('[data-testid="tweetTextarea_0"]'),button:!!d.querySelector('[data-testid="tweetButton"]')}));
+          const fieldInfo=fields.map(f=>({rects:f.getClientRects().length,hidden:!!f.closest('[aria-hidden="true"]'),dialog:!!f.closest('[role="dialog"]'),text:f.parentElement?.parentElement?.innerText?.replace(/\s+/g,' ').slice(0,120)}));
+          diagnostics.layout={dialogs,fields:fieldInfo};
+          const links=[...document.querySelectorAll('a[href*="/status/"]')].map(a=>a.getAttribute('href')).filter(Boolean).slice(0,8);
+          throw new Error(`${e.message} Редакторов: ${fields.length}, диалогов: ${dialogs.length}, кнопок: ${document.querySelectorAll('[data-testid="tweetButton"],[data-testid="tweetButtonInline"]').length}. Снимок: ${JSON.stringify({dialogs,fields:fieldInfo,links,chain:layout.slice(0,400)}).slice(0,1500)}`);
+        }
         let editor=unique('[data-testid="tweetTextarea_0"]',dialog);
         if(editor.innerText.trim())throw new Error('В редакторе уже есть черновик. Не перезаписываем его.');
         noteEditor('opened',0,editor);
