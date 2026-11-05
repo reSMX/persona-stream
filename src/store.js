@@ -16,6 +16,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS candidates(name TEXT NOT NULL, author TEXT NOT NULL, post_id TEXT NOT NULL, keyword TEXT NOT NULL, created TEXT NOT NULL, UNIQUE(name,post_id));
       CREATE TABLE IF NOT EXISTS actions(id INTEGER PRIMARY KEY, kind TEXT NOT NULL, target TEXT NOT NULL, author TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, UNIQUE(kind,target));
       CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, level TEXT NOT NULL, text TEXT NOT NULL, data TEXT, created TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS model_usage(id INTEGER PRIMARY KEY, stage TEXT NOT NULL, model TEXT NOT NULL, outcome TEXT NOT NULL, prompt_tokens INTEGER, answer_tokens INTEGER, wall_ms INTEGER NOT NULL, total_ms INTEGER, load_ms INTEGER, prompt_eval_ms INTEGER, eval_ms INTEGER, created TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS model_usage_created ON model_usage(created);
       CREATE TABLE IF NOT EXISTS state(key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
     this.db.prepare("UPDATE actions SET status='unknown', detail='Процесс завершился до подтверждения действия. Проверь X вручную.' WHERE status='pending'").run();
   }
@@ -39,6 +41,18 @@ export class Store {
   }
   topics() { return this.all('SELECT * FROM topics ORDER BY weight DESC').map(t => ({ ...t, keywords: JSON.parse(t.keywords), pinned: !!t.pinned })); }
   event(text, level = 'info', data = null) { this.run('INSERT INTO events(level,text,data,created) VALUES(?,?,?,?)', level,text,data ? JSON.stringify(data) : null,now()); }
+  recordModelUsage(row) {
+    this.run('INSERT INTO model_usage(stage,model,outcome,prompt_tokens,answer_tokens,wall_ms,total_ms,load_ms,prompt_eval_ms,eval_ms,created) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+      row.stage,row.model,row.outcome,row.promptTokens,row.answerTokens,row.wallMs,row.totalMs,row.loadMs,row.promptEvalMs,row.evalMs,row.at);
+  }
+  modelUsage() {
+    const aggregate=(where,...params)=>this.get(`SELECT COUNT(*) requests, SUM(outcome='success') successes, SUM(COALESCE(prompt_tokens,0)) promptTokens, SUM(COALESCE(answer_tokens,0)) answerTokens, SUM(prompt_tokens IS NULL OR answer_tokens IS NULL) unmetered, SUM(wall_ms) wallMs, SUM(COALESCE(eval_ms,0)) evalMs FROM model_usage ${where}`,...params);
+    const total=aggregate('');
+    const day=aggregate('WHERE created >= ?',new Date(Date.now()-86400000).toISOString());
+    const stages=this.all("SELECT stage, COUNT(*) requests, SUM(outcome='success') successes, SUM(COALESCE(prompt_tokens,0)) promptTokens, SUM(COALESCE(answer_tokens,0)) answerTokens, SUM(prompt_tokens IS NULL OR answer_tokens IS NULL) unmetered, SUM(wall_ms) wallMs, SUM(COALESCE(eval_ms,0)) evalMs FROM model_usage GROUP BY stage ORDER BY stage");
+    const normalize=row=>({requests:row.requests,successes:row.successes||0,failures:row.requests-(row.successes||0),promptTokens:row.promptTokens||0,answerTokens:row.answerTokens||0,totalTokens:(row.promptTokens||0)+(row.answerTokens||0),unmetered:row.unmetered||0,wallMs:row.wallMs||0,answerTokensPerSecond:row.evalMs?Math.round((row.answerTokens||0)*100000/row.evalMs)/100:null});
+    return {total:normalize(total),last24Hours:normalize(day),byStage:stages.map(row=>({stage:row.stage,...normalize(row)})),recent:this.all('SELECT * FROM model_usage ORDER BY id DESC LIMIT 30').map(row=>({id:row.id,stage:row.stage,model:row.model,outcome:row.outcome,promptTokens:row.prompt_tokens,answerTokens:row.answer_tokens,wallMs:row.wall_ms,totalMs:row.total_ms,loadMs:row.load_ms,promptEvalMs:row.prompt_eval_ms,evalMs:row.eval_ms,at:row.created}))};
+  }
   setState(key, value) { this.run('INSERT INTO state VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',key,JSON.stringify(value)); }
   state(key, fallback) { const r = this.get('SELECT value FROM state WHERE key=?', key); return r ? JSON.parse(r.value) : fallback; }
   rememberPreview(post, score, reason, selected) {
@@ -46,6 +60,7 @@ export class Store {
       ON CONFLICT(id) DO UPDATE SET preview=excluded.preview,status=excluded.status,score=excluded.score,reason=excluded.reason
       WHERE posts.status='selected'`,post.id,post.author,post.url,post.preview,selected ? 'selected' : 'skipped',score,reason,now());
   }
+  markImageSkipped(id) { this.run("UPDATE posts SET status='image_skipped', reason='Пост содержит изображение' WHERE id=? AND status='selected'",id); }
   markNotInterested(id) { this.run("UPDATE posts SET status='not_interested' WHERE id=? AND status='skipped'",id); }
   seen(id) { const post=this.get('SELECT status FROM posts WHERE id=?',id);return !!post && post.status!=='selected'; }
   author(handle, topicNames = []) {

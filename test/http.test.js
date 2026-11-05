@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
+import { Store } from '../src/store.js';
 
 test('local HTTP panel: configuration persistence, static UI, origin guard and export',async()=>{
   const dir=mkdtempSync(path.join(os.tmpdir(),'persona-http-'));
@@ -16,7 +17,12 @@ test('local HTTP panel: configuration persistence, static UI, origin guard and e
     let ready=false;
     for(let i=0;i<100;i++){try{const r=await fetch(url+'/api/state');if(r.ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,50));}
     assert.ok(ready,output);
-    const state=await (await fetch(url+'/api/state')).json();assert.equal(state.counts.read,0);
+    const state=await (await fetch(url+'/api/state')).json();assert.equal(state.counts.read,0);assert.equal(state.usage.requests,0);
+    const usage=await (await fetch(url+'/api/usage')).json();assert.equal(usage.dataset,'demo');assert.equal(usage.total.totalTokens,0);assert.deepEqual(usage.recent,[]);
+    const writer=new Store(path.join(dir,'demo.sqlite'));
+    writer.recordModelUsage({stage:'preview',model:'test-model',outcome:'success',promptTokens:40,answerTokens:10,wallMs:500,totalMs:400,loadMs:0,promptEvalMs:200,evalMs:200,at:new Date().toISOString()});writer.close();
+    const metered=await (await fetch(url+'/api/usage')).json();assert.equal(metered.total.totalTokens,50);assert.equal(metered.byStage[0].stage,'preview');
+    const liveUsage=await (await fetch(url+'/api/usage?dataset=live')).json();assert.equal(liveUsage.total.requests,0);
     const page=await fetch(url);assert.ok((await page.text()).includes('Авторы и память'));assert.ok(page.headers.get('content-security-policy').includes("frame-ancestors 'none'"));
     assert.equal((await fetch(url+'/app.js')).status,200);assert.equal((await fetch(url+'/style.css')).status,200);
     assert.equal((await fetch(url+'/api/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status,403);
@@ -27,7 +33,7 @@ test('local HTTP panel: configuration persistence, static UI, origin guard and e
     const saved=await (await fetch(url+'/api/state')).json();assert.equal(saved.config.persona.name,'Проверка');
     const retry=await fetch(url+'/api/actions/1/retry-failed-reply?dataset=live',{method:'POST',headers,body:JSON.stringify({acknowledgePublicReply:true})});assert.equal(retry.status,400);
     const start=await fetch(url+'/api/start',{method:'POST',headers,body:JSON.stringify({mode:'live',once:true})});assert.equal(start.status,500);assert.match((await start.json()).error,/аккаунт/);
-    const exported=await (await fetch(url+'/api/export')).json();assert.equal(exported.version,1);assert.equal(exported.dataset,'demo');assert.ok(Array.isArray(exported.memories));
+    const exported=await (await fetch(url+'/api/export')).json();assert.equal(exported.version,1);assert.equal(exported.dataset,'demo');assert.ok(Array.isArray(exported.memories));assert.ok(Array.isArray(exported.model_usage));
     assert.equal((await fetch(url+'/api/authors/nobody')).status,404);
     assert.equal((await fetch(url+'/api/demo/reset',{method:'POST',headers,body:'{}'})).status,200);
     const codeResponse=await fetch(url+'/api/browser/pair-code',{method:'POST',headers,body:'{}'});
@@ -37,7 +43,7 @@ test('local HTTP panel: configuration persistence, static UI, origin guard and e
     const bridgeHeaders={'Content-Type':'application/json','X-Persona-Bridge':'1','X-Extension-Id':extensionId,Origin:origin};
     assert.equal((await fetch(url+'/bridge/pair',{method:'POST',headers:{...bridgeHeaders,Origin:'https://evil.test'},body:JSON.stringify({code})})).status,403);
     assert.equal((await fetch(url+'/bridge/pair',{method:'POST',headers:bridgeHeaders,body:JSON.stringify({code})})).status,409);
-    const pair=await fetch(url+'/bridge/pair',{method:'POST',headers:bridgeHeaders,body:JSON.stringify({code,version:12})});assert.equal(pair.status,200);
+    const pair=await fetch(url+'/bridge/pair',{method:'POST',headers:bridgeHeaders,body:JSON.stringify({code,version:13})});assert.equal(pair.status,200);
     const token=(await pair.json()).token;
     assert.equal((await fetch(url+'/bridge/lease',{method:'POST',headers:{...bridgeHeaders,Authorization:'Bearer wrong'},body:'{}'})).status,401);
     const lease=await fetch(url+'/bridge/lease',{method:'POST',headers:{...bridgeHeaders,Authorization:'Bearer '+token},body:'{}'});

@@ -76,7 +76,7 @@ export class ExtensionBrowser {
   }
   async read(post,signal){
     statusUrl(post.url);signal?.throwIfAborted();
-    const data=z.object({text:z.string().min(1).max(10000),context:z.array(z.object({text:z.string().max(700),url:z.string().max(250)})).max(3)}).parse(await this.bridge.request('read',{post,account:this.getConfig().browser.account}));
+    const data=z.union([z.object({hasImage:z.literal(true)}),z.object({text:z.string().min(1).max(10000),context:z.array(z.object({text:z.string().max(700),url:z.string().max(250)})).max(3)})]).parse(await this.bridge.request('read',{post,account:this.getConfig().browser.account}));
     signal?.throwIfAborted();return {...post,...data};
   }
   async perform(kind,post,text,signal){

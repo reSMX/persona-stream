@@ -163,6 +163,16 @@ test('observe mode reads and learns without outward actions',async()=>{
   assert.equal(Object.hasOwn(scanArguments,'query'),false);
   Object.values(stores).forEach(s=>s.close());
 });
+test('newly detected image post is skipped before full analysis or actions',async()=>{
+  const c=config();c.browser.account='mybot';c.reading.fullReads=1;
+  const stores={demo:makeStore(),live:makeStore()};let modelCalls=0,actions=0;
+  const browser={ready:async()=>{},scan:async()=>[makePost()],read:async post=>({...post,hasImage:true}),perform:async()=>{actions++;}};
+  const model={check:async()=>{},json:async()=>{modelCalls++;return {items:[{index:0,interest:1,novelty:1,curiosity:1,topics:['Локальные ИИ-модели'],reason:'a'}]};}};
+  const e=new Engine({stores,config:{value:c},model,browser});await e.start('observe',true);await waitEngine(e);
+  assert.equal(e.status.error,null);assert.equal(modelCalls,1);assert.equal(actions,0);
+  assert.equal(stores.live.snapshot().posts[0].status,'image_skipped');assert.equal(stores.live.readCount(),0);
+  Object.values(stores).forEach(store=>store.close());
+});
 test('uncertain publication stops and cannot be repeated automatically',async()=>{
   const c=config();c.actions.warmupReads=0;const stores={demo:makeStore(),live:makeStore()};let attempts=0;
   const e=new Engine({stores,config:{value:c},model:{},browser:{perform:async()=>{attempts++;const x=new Error('timeout');x.mayHaveActed=true;throw x;}}});e.status.mode='live';

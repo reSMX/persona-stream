@@ -18,7 +18,7 @@ mkdirSync(DATA,{recursive:true});
 const config=new ConfigFile(DATA);
 const stores={live:new Store(path.join(DATA,'memory.sqlite')),demo:new Store(path.join(DATA,'demo.sqlite'))};
 for(const store of Object.values(stores)) store.seed(config.value.topics);
-const model=new Ollama(()=>config.value);
+const model=new Ollama(()=>config.value,(row,dataset)=>stores[dataset].recordModelUsage(row));
 const bridge=new ExtensionBridge();
 const browser=new BrowserRouter(new XBrowser(path.join(DATA,'x-browser'),()=>config.value),new ExtensionBrowser(bridge,()=>config.value),()=>config.value);
 const engine=new Engine({stores,config,model,browser});
@@ -52,11 +52,12 @@ const selectStore=req=>stores[req.query.dataset==='live'?'live':'demo'];
 function idle() { if(engine.status.busy || engine.status.running || browserBusy) { const e=new Error('Останови агента и дождись текущей операции браузера перед изменениями.');e.status=409;throw e; } }
 async function browserOperation(fn) { idle();browserBusy=true;try{return await fn();}finally{browserBusy=false;} }
 
-app.get('/api/state',(req,res)=>res.json({config:config.value,status:engine.status,model:model.last,browser:{open:!!browser.context,account:browser.identity,connection:config.value.browser.connection,extension:bridge.info()},...selectStore(req).snapshot()}));
+app.get('/api/state',(req,res)=>res.json({config:config.value,status:engine.status,model:model.last,usage:selectStore(req).modelUsage().total,browser:{open:!!browser.context,account:browser.identity,connection:config.value.browser.connection,extension:bridge.info()},...selectStore(req).snapshot()}));
+app.get('/api/usage',(req,res)=>res.json({dataset:req.query.dataset==='live'?'live':'demo',...selectStore(req).modelUsage()}));
 app.post('/api/browser/pair-code',(req,res)=>{idle();res.json({...bridge.pairingCode(),extensionPath:path.join(ROOT,'chrome-extension')});});
 app.post('/bridge/pair',(req,res)=>{
   idle();const code=z.string().regex(/^\d{6}$/).parse(req.body.code);
-  if(req.body.version!==12)return res.status(409).json({error:'Обнови расширение Persona Stream в chrome://extensions и подключи вкладку X заново.'});
+  if(req.body.version!==13)return res.status(409).json({error:'Обнови расширение Persona Stream в chrome://extensions и подключи вкладку X заново.'});
   res.json(bridge.pair(code,String(req.headers['x-extension-id']||'')));
 });
 app.use('/bridge',(req,res,next)=>{
@@ -156,7 +157,7 @@ app.post('/api/demo/reset',(req,res)=>{
 app.get('/api/export',(req,res)=>{
   const store=selectStore(req);
   const data={version:1,exportedAt:new Date().toISOString(),dataset:req.query.dataset==='live'?'live':'demo',config:config.value};
-  for(const table of ['topics','posts','authors','memories','changes','actions','events','candidates','state']) data[table]=store.all(`SELECT * FROM ${table}`);
+  for(const table of ['topics','posts','authors','memories','changes','actions','events','candidates','model_usage','state']) data[table]=store.all(`SELECT * FROM ${table}`);
   res.setHeader('Content-Disposition','attachment; filename="persona-memory.json"');res.json(data);
 });
 app.use(express.static(path.join(ROOT,'public')));

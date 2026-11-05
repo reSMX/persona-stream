@@ -1,6 +1,6 @@
 {
   "name": "persona-stream",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": true,
   "type": "module",
   "description": "Local persona, interest and author-memory workbench for Ollama and X",

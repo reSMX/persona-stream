@@ -28,6 +28,7 @@ export async function xPage(op,payload={}) {
     };
     const directTime=card=>[...card.querySelectorAll('time')].find(time=>time.closest('article[data-testid="tweet"]')===card);
     const directText=card=>[...card.querySelectorAll('[data-testid="tweetText"]')].find(body=>body.closest('article[data-testid="tweet"]')===card);
+    const hasImage=card=>!!card?.querySelector?.('[data-testid="tweetPhoto"],a[href*="/photo/"],img[src*="pbs.twimg.com/media/"]');
     const feedCardFor=post=>{
       const expected=`/${post.author}/status/${post.id}`;
       const cards=[...document.querySelectorAll('article[data-testid="tweet"]')].filter(card=>directTime(card)?.closest('a')?.getAttribute('href')?.toLowerCase()===expected);
@@ -134,10 +135,10 @@ export async function xPage(op,payload={}) {
       // a live server lease. Account and target are rechecked in the same task.
       if(!identity())throw new Error('Аккаунт больше не подтверждён');
       const {kind,post,text}=payload;let button;
-      if(kind==='like') {requireTarget();const card=cardFor(post.id);if(!card)throw new Error('Пост исчез');button=unique('[data-testid="like"]',card);}
+      if(kind==='like') {requireTarget();const card=cardFor(post.id);if(!card)throw new Error('Пост исчез');if(hasImage(card))throw new Error('Пост содержит изображение. Действие отменено.');button=unique('[data-testid="like"]',card);}
       else if(kind==='notInterested'){
         requireTarget();if(!forYouActive())throw new Error('Открыта не лента For you');
-        const card=feedCardFor(post);if(!card)throw new Error('Пост исчез из For you');if(!feedTextMatches(card,post.preview))throw new Error('Текст поста не совпал с превью');
+        const card=feedCardFor(post);if(!card)throw new Error('Пост исчез из For you');if(hasImage(card))throw new Error('Пост содержит изображение. Действие отменено.');if(!feedTextMatches(card,post.preview))throw new Error('Текст поста не совпал с превью');
         button=feedbackItem();
       }
       else if(kind==='follow') {requireTarget();if(location.pathname.toLowerCase()!==`/${post.author}`)throw new Error('Открыт другой профиль');button=unique('[data-testid$="-follow"]',followHeader());}
@@ -146,6 +147,7 @@ export async function xPage(op,payload={}) {
           if(!post || !/^\d+$/.test(post.id) || !/^[a-z0-9_]{1,15}$/.test(post.author))throw new Error('Некорректная цель ответа');
         } else if(!/^\/compose\/(post|tweet)$/.test(location.pathname))throw new Error('Открыт другой экран');
         const dialog=composerDialog(kind,post);if(!dialog)throw new Error('Не найдено окно публикации');
+        if(kind==='reply' && (hasImage(dialog)||hasImage(cardFor(post.id))))throw new Error('Пост содержит изображение. Ответ отменён.');
         const editor=unique('[data-testid="tweetTextarea_0"]',dialog);
         if(editor.innerText.trim()!==text.trim())throw new Error('Текст в редакторе изменился. Отправка отменена.');
         if(kind==='reply' && !replyMatchesTarget(dialog,post))throw new Error('Не удалось подтвердить исходный пост в окне ответа. Отправка отменена.');
@@ -158,7 +160,7 @@ export async function xPage(op,payload={}) {
     if(op==='status')return {ok:true,data:{account}};
     if(op==='visible'){
       if(!forYouActive())throw new Error('Открыта не лента For you');
-      return {ok:true,data:[...new Set([...document.querySelectorAll('article[data-testid="tweet"]')].map(card=>directTime(card)?.closest('a')?.getAttribute('href')?.match(/^\/[A-Za-z0-9_]{1,15}\/status\/(\d+)$/)?.[1]).filter(Boolean))].slice(0,100)};
+      return {ok:true,data:[...new Set([...document.querySelectorAll('article[data-testid="tweet"]')].filter(card=>!hasImage(card)).map(card=>directTime(card)?.closest('a')?.getAttribute('href')?.match(/^\/[A-Za-z0-9_]{1,15}\/status\/(\d+)$/)?.[1]).filter(Boolean))].slice(0,100)};
     }
     if(op==='editor-check'){
       const {kind,post,expected}=payload;
@@ -194,7 +196,7 @@ export async function xPage(op,payload={}) {
           const href=directTime(card)?.closest('a')?.getAttribute('href');
           const match=href?.match(/^\/([A-Za-z0-9_]{1,15})\/status\/(\d+)$/);
           const text=directText(card)?.innerText;
-          if(!match || !text || card.querySelector('[data-testid="placementTracking"]') || match[1].toLowerCase()===account)continue;
+          if(!match || !text || hasImage(card) || card.querySelector('[data-testid="placementTracking"]') || match[1].toLowerCase()===account)continue;
           results.set(match[2],{id:match[2],author:match[1].toLowerCase(),url:`https://x.com/${match[1].toLowerCase()}/status/${match[2]}`,preview:text.slice(0,payload.previewChars)});
         }
         if(results.size<payload.limit){window.scrollBy(0,700);await sleep(800);}
@@ -203,21 +205,22 @@ export async function xPage(op,payload={}) {
     }
     if(op==='read') {
       requireTarget();let card=await wait(()=>cardFor(payload.post.id),`пост ${payload.post.id} на странице`);
+      if(hasImage(card))return {ok:true,data:{hasImage:true}};
       let body=mainText(card,payload.post.preview);
       const more=body.querySelector?.('[data-testid="tweet-text-show-more-link"]') ||
         (card.querySelectorAll('[data-testid="tweetText"]').length===1?card.querySelector('[data-testid="tweet-text-show-more-link"]'):null);
-      if(more){more.click();await sleep(500);card=cardFor(payload.post.id);body=mainText(card,payload.post.preview);if(body.querySelector?.('[data-testid="tweet-text-show-more-link"]'))throw new Error('Не удалось раскрыть полный текст');}
+      if(more){more.click();await sleep(500);card=cardFor(payload.post.id);if(hasImage(card))return {ok:true,data:{hasImage:true}};body=mainText(card,payload.post.preview);if(body.querySelector?.('[data-testid="tweet-text-show-more-link"]'))throw new Error('Не удалось раскрыть полный текст');}
       const text=body.innerText;
       if(text.length>10000)throw new Error('Пост длиннее 10 000 знаков');
-      const context=[];for(const other of document.querySelectorAll('article[data-testid="tweet"]')){if(other===card)break;const href=other.querySelector('time')?.closest('a')?.getAttribute('href');const content=other.querySelector('[data-testid="tweetText"]')?.innerText;if(href&&content)context.push({url:'https://x.com'+href,text:content.slice(0,700)});}
+      const context=[];for(const other of document.querySelectorAll('article[data-testid="tweet"]')){if(other===card)break;if(hasImage(other))continue;const href=other.querySelector('time')?.closest('a')?.getAttribute('href');const content=other.querySelector('[data-testid="tweetText"]')?.innerText;if(href&&content)context.push({url:'https://x.com'+href,text:content.slice(0,700)});}
       return {ok:true,data:{text,context:context.slice(-3)}};
     }
     if(op==='prepare') {
       const {kind,post,text}=payload;
-      if(kind==='like'){requireTarget();const card=await wait(()=>cardFor(post.id),`пост ${post.id} перед лайком`);if(card.querySelector('[data-testid="unlike"]'))return {ok:true,data:{already:true,detail:'Лайк уже установлен'}};unique('[data-testid="like"]',card);}
+      if(kind==='like'){requireTarget();const card=await wait(()=>cardFor(post.id),`пост ${post.id} перед лайком`);if(hasImage(card))throw new Error('Пост содержит изображение. Действие отменено.');if(card.querySelector('[data-testid="unlike"]'))return {ok:true,data:{already:true,detail:'Лайк уже установлен'}};unique('[data-testid="like"]',card);}
       else if(kind==='notInterested'){
         requireTarget();if(!forYouActive())throw new Error('Открыта не лента For you');
-        const card=feedCardFor(post);if(!card)throw new Error('Пост исчез из For you');if(!feedTextMatches(card,post.preview))throw new Error('Текст поста не совпал с превью');
+        const card=feedCardFor(post);if(!card)throw new Error('Пост исчез из For you');if(hasImage(card))throw new Error('Пост содержит изображение. Действие отменено.');if(!feedTextMatches(card,post.preview))throw new Error('Текст поста не совпал с превью');
         const caret=[...card.querySelectorAll('[data-testid="caret"]')].filter(el=>el.closest('article[data-testid="tweet"]')===card);
         if(caret.length!==1)throw new Error('Меню целевого поста не найдено');
         caret[0].click();await wait(()=>[...document.querySelectorAll('[role="menu"]')].find(visible),'меню поста');
@@ -225,7 +228,7 @@ export async function xPage(op,payload={}) {
       }
       else if(kind==='follow'){requireTarget();if(location.pathname.toLowerCase()!==`/${post.author}`)throw new Error('Открыт другой профиль');await wait(()=>document.querySelector('[data-testid="userActions"]'),'кнопки профиля автора');const header=followHeader();if(header.querySelector('[data-testid$="-unfollow"]'))return {ok:true,data:{already:true,detail:'Подписка уже есть'}};unique('[data-testid$="-follow"]',header);}
       else if(kind==='reply'||kind==='post') {
-        if(kind==='reply'&&!composerDialog(kind,post)){requireTarget();const card=await wait(()=>cardFor(post.id),`пост ${post.id} перед ответом`);unique('[data-testid="reply"]',card).click();}
+        if(kind==='reply'&&!composerDialog(kind,post)){requireTarget();const card=await wait(()=>cardFor(post.id),`пост ${post.id} перед ответом`);if(hasImage(card))throw new Error('Пост содержит изображение. Ответ отменён.');unique('[data-testid="reply"]',card).click();}
         let dialog;
         try{dialog=await wait(()=>composerDialog(kind,post),'окно ответа');}
         catch(e){
@@ -241,6 +244,7 @@ export async function xPage(op,payload={}) {
           throw new Error(`${e.message} Редакторов: ${fields.length}, диалогов: ${dialogs.length}, кнопок: ${document.querySelectorAll('[data-testid="tweetButton"],[data-testid="tweetButtonInline"]').length}. Снимок: ${JSON.stringify({dialogs,fields:fieldInfo,links,chain:layout.slice(0,400)}).slice(0,1500)}`);
         }
         let editor=unique('[data-testid="tweetTextarea_0"]',dialog);
+        if(kind==='reply' && (hasImage(dialog)||hasImage(cardFor(post.id))))throw new Error('Пост содержит изображение. Ответ отменён.');
         if(editor.innerText.trim())throw new Error('В редакторе уже есть черновик. Не перезаписываем его.');
         noteEditor('opened',0,editor);
         focusEditorEnd(editor);

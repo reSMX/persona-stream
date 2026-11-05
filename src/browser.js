@@ -9,6 +9,7 @@ export function statusUrl(value) {
   return u;
 }
 const checkAbort = signal => signal?.throwIfAborted();
+const IMAGE_SELECTOR='[data-testid="tweetPhoto"],a[href*="/photo/"],img[src*="pbs.twimg.com/media/"]';
 
 export class XBrowser {
   constructor(profileDir,getConfig) { this.profileDir=profileDir; this.getConfig=getConfig; this.context=null; this.feed=null; this.identity=null; }
@@ -62,14 +63,14 @@ export class XBrowser {
     const found=new Map();
     for(let round=0;round<6 && found.size<limit;round++) {
       checkAbort(signal);
-      const rows=await this.feed.locator('article[data-testid="tweet"]').evaluateAll((cards,{chars})=>cards.map(card=>{
+      const rows=await this.feed.locator('article[data-testid="tweet"]').evaluateAll((cards,{chars,imageSelector})=>cards.map(card=>{
         const time=[...card.querySelectorAll('time')].find(t=>t.closest('article[data-testid="tweet"]')===card);
         const link=time?.closest('a');
         const match=link?.getAttribute('href')?.match(/^\/([A-Za-z0-9_]+)\/status\/(\d+)$/);
         const text=[...card.querySelectorAll('[data-testid="tweetText"]')].find(t=>t.closest('article[data-testid="tweet"]')===card)?.innerText || '';
         const ad=!!card.querySelector('[data-testid="placementTracking"]') || /^(Ad|Реклама|Promoted)$/.test(card.querySelector('[data-testid="socialContext"]')?.innerText || '');
-        return match && !ad && text ? {id:match[2],author:match[1].toLowerCase(),url:`https://x.com/${match[1]}/status/${match[2]}`,preview:text.slice(0,chars),hasMedia:!!card.querySelector('[data-testid="tweetPhoto"],video')} : null;
-      }).filter(Boolean),{chars:previewChars});
+        return match && !ad && text && !card.querySelector(imageSelector) ? {id:match[2],author:match[1].toLowerCase(),url:`https://x.com/${match[1]}/status/${match[2]}`,preview:text.slice(0,chars)} : null;
+      }).filter(Boolean),{chars:previewChars,imageSelector:IMAGE_SELECTOR});
       for(const row of rows) if(row.author!==this.identity && !exclude(row.id)) found.set(row.id,row);
       if(found.size<limit) { await this.feed.mouse.wheel(0,700); await this.feed.waitForTimeout(1000); }
     }
@@ -80,7 +81,7 @@ export class XBrowser {
     if(new URL(this.feed.url()).pathname!=='/home')throw new BrowserAttention('Открыта не лента For you');
     const selected=await this.feed.getByRole('tab',{name:/^(For you|Для вас)$/i}).getAttribute('aria-selected');
     if(selected!=='true')throw new BrowserAttention('Вкладка For you не выбрана');
-    return this.feed.locator('article[data-testid="tweet"]').evaluateAll(cards=>[...new Set(cards.map(card=>[...card.querySelectorAll('time')].find(t=>t.closest('article[data-testid="tweet"]')===card)?.closest('a')?.getAttribute('href')?.match(/^\/[A-Za-z0-9_]{1,15}\/status\/(\d+)$/)?.[1]).filter(Boolean))].slice(0,100));
+    return this.feed.locator('article[data-testid="tweet"]').evaluateAll((cards,imageSelector)=>[...new Set(cards.filter(card=>!card.querySelector(imageSelector)).map(card=>[...card.querySelectorAll('time')].find(t=>t.closest('article[data-testid="tweet"]')===card)?.closest('a')?.getAttribute('href')?.match(/^\/[A-Za-z0-9_]{1,15}\/status\/(\d+)$/)?.[1]).filter(Boolean))].slice(0,100),IMAGE_SELECTOR);
   }
   async notInterested(post,signal){
     statusUrl(post.url);checkAbort(signal);await this.ready();
@@ -91,6 +92,7 @@ export class XBrowser {
     if(await card.count()!==1)throw new BrowserAttention('Целевой пост исчез из For you или показан неоднозначно');
     const identity=await card.evaluate(el=>[...el.querySelectorAll('time')].find(t=>t.closest('article[data-testid="tweet"]')===el)?.closest('a')?.getAttribute('href')?.toLowerCase());
     if(identity!==`/${post.author}/status/${post.id}`)throw new BrowserAttention('Целевой пост не является основным постом карточки');
+    if(await card.locator(IMAGE_SELECTOR).count())throw new BrowserAttention('Пост содержит изображение. Действие отменено.');
     const text=await card.evaluate(el=>[...el.querySelectorAll('[data-testid="tweetText"]')].find(t=>t.closest('article[data-testid="tweet"]')===el)?.innerText||'');
     const compact=value=>String(value||'').toLowerCase().replace(/\s+/g,'');
     if(!post.preview || !compact(text).startsWith(compact(post.preview).slice(0,80)))throw new BrowserAttention('Текст поста в ленте не совпал с превью');
@@ -127,6 +129,7 @@ export class XBrowser {
       await page.goto(post.url,{waitUntil:'domcontentloaded',timeout:45000});
       await this.ready(page);
       const card=await this.card(page,post.id);
+      if(await card.locator(IMAGE_SELECTOR).count())return {...post,hasImage:true};
       const textBlocks=card.getByTestId('tweetText');
       const mainIndex=()=>textBlocks.evaluateAll((blocks,preview)=>{
         const compact=value=>String(value||'').toLowerCase().replace(/\s+/g,'');
@@ -139,20 +142,22 @@ export class XBrowser {
       let more=body.getByTestId('tweet-text-show-more-link');
       if(await more.count()===0 && await textBlocks.count()===1)more=card.getByTestId('tweet-text-show-more-link');
       if(await more.count()===1){await more.click();index=await mainIndex();if(index<0)throw new BrowserAttention('После раскрытия текста пост не совпал с превью.');body=textBlocks.nth(index);}
+      if(await card.locator(IMAGE_SELECTOR).count())return {...post,hasImage:true};
       if(await body.getByTestId('tweet-text-show-more-link').count())throw new BrowserAttention('X не раскрыл полный текст. Пост пропущен.');
       const text=await body.innerText();
       if(text.length>10000) throw new Error('Пост длиннее лимита полного чтения (10 000 знаков). Увеличивать контекст автоматически не будем.');
       // Visible preceding cards are context, never instructions or a source of tool calls.
-      const context=await page.locator('article[data-testid="tweet"]').evaluateAll((cards,id)=>{
+      const context=await page.locator('article[data-testid="tweet"]').evaluateAll((cards,{id,imageSelector})=>{
         const result=[];
         for(const card of cards) {
           const href=card.querySelector('time')?.closest('a')?.getAttribute('href') || '';
           if([...card.querySelectorAll('time')].some(t=>t.closest('a')?.getAttribute('href')?.endsWith(`/status/${id}`))) break;
+          if(card.querySelector(imageSelector))continue;
           const text=card.querySelector('[data-testid="tweetText"]')?.innerText;
           if(text) result.push({url:`https://x.com${href}`,text:text.slice(0,700)});
         }
         return result.slice(-3);
-      },post.id);
+      },{id:post.id,imageSelector:IMAGE_SELECTOR});
       checkAbort(signal);
       return {...post,text,context};
     } finally { await page.close(); }
@@ -172,6 +177,7 @@ export class XBrowser {
       await this.ready(page);
       if(kind==='like') {
         const card=await this.card(page,post.id);
+        if(await card.locator(IMAGE_SELECTOR).count())throw new BrowserAttention('Пост содержит изображение. Действие отменено.');
         if(await card.getByTestId('unlike').count()) return 'Лайк уже установлен';
         checkAbort(signal); mayHaveActed=true;
         await card.getByTestId('like').click();
@@ -193,6 +199,7 @@ export class XBrowser {
       }
       if(kind==='reply') {
         const card=await this.card(page,post.id);
+        if(await card.locator(IMAGE_SELECTOR).count())throw new BrowserAttention('Пост содержит изображение. Ответ отменён.');
         checkAbort(signal); await card.getByTestId('reply').click();
       }
       const dialog=page.getByRole('dialog');
